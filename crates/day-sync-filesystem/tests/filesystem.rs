@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! A shared folder as the store: store semantics, two apps converging through it, and a
 //! checkpoint handoff that never touches a server.
+#![cfg(not(target_arch = "wasm32"))]
 use day_sync::{lifecycle::Package, *};
 use day_sync_filesystem::FilesystemStore;
 use futures_lite::future::block_on;

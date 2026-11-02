@@ -3,6 +3,7 @@
 //! Devices at three application revisions share one space over WebDAV. The application is shaped
 //! like Day-News's feed-state profile: revision 1 accepts exactly today's records, revision 2 adds
 //! an `archived` kind, and revision 3 lets a star carry a note.
+#![cfg(not(target_arch = "wasm32"))]
 use day_persistence::{DbError, ModelContainer, Sqlite, SqliteConnection, Value, schema};
 use day_sync::*;
 use day_sync_webdav::{WebDavStore, webdav::*};

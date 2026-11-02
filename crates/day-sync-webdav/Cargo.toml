@@ -16,11 +16,12 @@ default = []
 # Reach the server through the reqwest provider instead of Day's native HTTP stack.
 reqwest = ["day-webdav/reqwest"]
 
-[dependencies]
+# Empty on the web target, like the engine it serves.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 day-sync = { workspace = true }
 day-webdav = { workspace = true }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 day-persistence = { workspace = true }
 day-webdav = { workspace = true, features = ["demo-server"] }
 futures-lite = { workspace = true }

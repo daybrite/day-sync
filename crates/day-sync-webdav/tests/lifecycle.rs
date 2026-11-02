@@ -1,5 +1,6 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
+#![cfg(not(target_arch = "wasm32"))]
 use day_sync::{lifecycle::*, *};
 use day_sync_webdav::{
     WebDavStore,

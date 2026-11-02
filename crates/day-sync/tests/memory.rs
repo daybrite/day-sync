@@ -1,6 +1,7 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
 //! The engine against the in-process store: the whole sync pass with no transport at all.
+#![cfg(not(target_arch = "wasm32"))]
 use day_sync::*;
 use futures_lite::future::block_on;
 use std::sync::Arc;

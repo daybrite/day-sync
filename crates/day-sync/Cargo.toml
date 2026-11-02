@@ -11,7 +11,9 @@ publish.workspace = true
 [package.metadata.day]
 compat = "0.6"
 
-[dependencies]
+# The engine sits on rusqlite, so the crate is empty on the web target (`lib.rs` is
+# `#![cfg(not(target_arch = "wasm32"))]`) and takes nothing with it there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 day-model = { workspace = true }
 day-persistence = { workspace = true }
 serde = { workspace = true }
@@ -19,7 +21,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 futures-lite = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
