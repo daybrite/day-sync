@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/day-sync", "crates/day-sync-webdav", "crates/day-sync-filesystem"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+repository = "https://github.com/daybrite/day-sync"
+license = "MPL-2.0"
+# The protocol is under design review; nothing here is a release until the design settles.
+publish = false
+
+[workspace.dependencies]
+day-sync = { path = "crates/day-sync", version = "=0.1.0" }
+# Both siblings come from their repositories' default branches until the crates are published:
+# day-persistence for the transaction-participant seam, day-webdav for the WebDAV transport.
+# `day patch --local ../day --local ../day-persistence --local ../day-webdav` builds against checkouts.
+day-persistence = { git = "https://github.com/daybrite/day-persistence.git", default-features = false, features = ["driver-rusqlite", "bundled"] }
+day-webdav = { git = "https://github.com/daybrite/day-webdav.git" }
+day-model = "0.6"
+day-reactive = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+uuid = { version = "1", features = ["v4", "serde"] }
+futures-lite = "2"
+tempfile = "3"
+rusqlite = { version = "0.40", features = ["bundled"] }

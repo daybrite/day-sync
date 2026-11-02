@@ -1,0 +1,31 @@
+[package]
+name = "day-sync-webdav"
+description = "A WebDAV folder as a day-sync store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[package.metadata.day]
+compat = "0.6"
+
+[features]
+default = []
+# Reach the server through the reqwest provider instead of Day's native HTTP stack.
+reqwest = ["day-webdav/reqwest"]
+
+[dependencies]
+day-sync = { workspace = true }
+day-webdav = { workspace = true }
+
+[dev-dependencies]
+day-persistence = { workspace = true }
+day-webdav = { workspace = true, features = ["demo-server"] }
+futures-lite = { workspace = true }
+tempfile = { workspace = true }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }

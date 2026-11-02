@@ -1,0 +1,26 @@
+[package]
+name = "day-sync"
+description = "Experimental replication of a Day persistence store: the engine and its store contract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[package.metadata.day]
+compat = "0.6"
+
+[dependencies]
+day-model = { workspace = true }
+day-persistence = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+futures-lite = { workspace = true }
+tempfile = { workspace = true }
+rusqlite = { workspace = true }
+day-reactive = { workspace = true }

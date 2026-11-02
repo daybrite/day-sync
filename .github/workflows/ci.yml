@@ -1,0 +1,40 @@
+# Copyright © The Daybrite Project
+# SPDX-License-Identifier: MPL-2.0
+name: ci
+
+# The shared Day library workflow (daybrite/actions' daylib.yml) reads what to check from this
+# repository's manifests: fmt, clippy and test of the three crates on Linux, macOS and Windows,
+# with and without the WebDAV crate's `reqwest` provider, and clippy for the mobile targets. There is no demo app, so the demo and
+# website legs are skipped, and the crate is `publish = false`, so nothing goes to crates.io.
+# A push builds against the head of day's main branch and of every other Day repository's
+# default branch; the nightly run builds against the newest releases.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      day-main:
+        description: Build against day's main branch instead of the newest release
+        type: boolean
+        default: false
+  schedule:
+    - cron: "30 6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: daybrite/actions/.github/workflows/daylib.yml@v1
+    # The grants the shared workflow declares for its jobs. The demo and publish legs that would
+    # use them are skipped here: no Day.toml, `publish = false`.
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    secrets: inherit
+    with:
+      day-main: ${{ inputs.day-main || false }}
+      feature-sets: --features day-sync-webdav/reqwest
+      publish: false

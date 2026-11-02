@@ -1,0 +1,7 @@
+/target
+Cargo.lock
+.DS_Store
+
+# Written by `day patch`: machine-local, resolves the Day crates from checkouts.
+/.cargo/config.toml
+__pycache__/
