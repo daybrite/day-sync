@@ -15,7 +15,7 @@ pub struct Space {
 impl Space {
     pub fn new(profile: &str) -> Result<Self, Error> {
         let s = Self {
-            version: 4,
+            version: 5,
             encoding: "plain-json-v1".into(),
             id: uuid::Uuid::new_v4().to_string(),
             profile: profile.into(),
@@ -24,7 +24,7 @@ impl Space {
         Ok(s)
     }
     pub fn validate(&self) -> Result<(), Error> {
-        if self.version != 4 || self.encoding != "plain-json-v1" {
+        if self.version != 5 || self.encoding != "plain-json-v1" {
             return Err(Error::UnsupportedFormat);
         }
         if !wire::valid_id(&self.id) || self.profile.is_empty() || self.profile.len() > 256 {
@@ -49,7 +49,7 @@ impl Space {
         if !wire::valid_id(id) {
             return Err(Error::InvalidWire);
         }
-        let directory = [format!("day-sync-v4-{id}")];
+        let directory = [format!("day-sync-v5-{id}")];
         let bytes = store
             .get(&directory, "space.json")
             .await?
@@ -73,7 +73,7 @@ pub struct Identity {
 }
 impl Identity {
     pub fn create_space() -> Result<Self, Error> {
-        Self::create_space_for("day-sync:bookmark:4")
+        Self::create_space_for("day-sync:bookmark:5")
     }
     pub fn create_space_for(profile: &str) -> Result<Self, Error> {
         Self::join(Space::new(profile)?)

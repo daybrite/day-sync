@@ -3,7 +3,7 @@
 use crate::{BookmarkValue, Change};
 use day_persistence::{DbError, SqliteConnection};
 
-/// Versioned application mapping over v4's bounded two-string record envelope. Applications
+/// Versioned application mapping over v5's bounded two-string record envelope. Applications
 /// MUST validate their namespace, canonical payload and identity before accepting a record.
 /// Capture and projection execute inside the same transaction as the model/frontier changes.
 /// Implementations must suppress their capture triggers during projection, and retain user
@@ -26,6 +26,16 @@ pub trait Application: Send + Sync + 'static {
     }
     fn resolve(&self, _values: &[Option<BookmarkValue>]) -> Result<usize, DbError> {
         Ok(0)
+    }
+    /// Report unreadable surviving state after projection, or `None` when the hold clears.
+    /// A retained display cache is local; a fresh replica need not have the same cache.
+    fn held(
+        &self,
+        _connection: &mut dyn SqliteConnection,
+        _id: &str,
+        _required_revision: Option<u32>,
+    ) -> Result<(), DbError> {
+        Ok(())
     }
     fn project(
         &self,

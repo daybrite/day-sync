@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-labelledby="title description">
+<!-- Copyright © The Daybrite Project; SPDX-License-Identifier: MPL-2.0 -->
+<title id="title">Verify a replacement before deleting inputs</title><desc id="description">The writer journals the snapshot and exact cleanup inputs, writes parts and manifest, verifies the complete remote snapshot, and then deletes eligible inputs in bounded batches.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#526477"/></marker></defs>
+<rect width="960" height="500" rx="16" fill="#ffffff"/>
+<g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#182c40">
+<text x="32" y="39" font-size="23" font-weight="700">Verify a replacement before deleting inputs</text>
+<rect x="32" y="90" width="270" height="136" rx="12" fill="#edf4fc" stroke="#9bb5d3" stroke-width="1.5"/>
+<text x="50" y="121" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">1. Save the plan locally</text>
+<text x="50" y="151" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Capture complete state.</text>
+<text x="50" y="176" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Save exact snapshot bytes.</text>
+<text x="50" y="201" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Record eligible inputs.</text>
+<rect x="345" y="90" width="270" height="136" rx="12" fill="#edf4fc" stroke="#9bb5d3" stroke-width="1.5"/>
+<text x="363" y="121" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">2. Publish the snapshot</text>
+<text x="363" y="151" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Write its parts.</text>
+<text x="363" y="176" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Write the manifest last.</text>
+<text x="363" y="201" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Keep old inputs in place.</text>
+<rect x="658" y="90" width="270" height="136" rx="12" fill="#edf7f1" stroke="#8bb69c" stroke-width="1.5"/>
+<text x="676" y="121" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">3. Read back and verify</text>
+<text x="676" y="151" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Read every part.</text>
+<text x="676" y="176" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Check hashes and state.</text>
+<text x="676" y="201" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Require a complete copy.</text>
+<path d="M 304 158 L 342 158" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 617 158 L 655 158" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 793 228 L 793 264" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="448" y="267" width="480" height="113" rx="12" fill="#edf7f1" stroke="#8bb69c" stroke-width="1.5"/>
+<text x="466" y="298" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">4. Reclaim eligible inputs</text>
+<text x="466" y="328" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Delete only individually processed, covered inputs.</text>
+<text x="466" y="353" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Save progress after each bounded batch.</text>
+<rect x="32" y="267" width="362" height="113" rx="12" fill="#fff6e6" stroke="#cba258" stroke-width="1.5"/>
+<text x="50" y="298" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">If verification fails</text>
+<text x="50" y="328" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Preserve remaining inputs.</text>
+<text x="50" y="353" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Repair or retry before cleanup.</text>
+<path d="M 658 204 L 640 204 L 640 248 L 212 248 L 212 264" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="480" y="424" font-size="17" fill="#354c61" font-weight="400" text-anchor="middle">A resumed cleanup repairs and verifies its replacement again.</text>
+<text x="480" y="453" font-size="17" fill="#354c61" font-weight="400" text-anchor="middle">Other devices can be offline throughout ordinary compaction.</text>
+</g></svg>

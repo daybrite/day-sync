@@ -162,7 +162,7 @@ fn two_apps_synchronize_through_a_shared_folder() {
         // The folder is only ever one store; a file that disappears is reported, not applied.
         let other = FilesystemStore::open(dir.path().join("elsewhere")).unwrap();
         assert!(matches!(a.sync(&other).await, Err(Error::WrongEndpoint)));
-        let directory = vec![format!("day-sync-v4-{}", a.space())];
+        let directory = vec![format!("day-sync-v5-{}", a.space())];
         let lost = store
             .list(&directory)
             .await
@@ -211,7 +211,7 @@ fn checkpoint_handoff_through_a_folder() {
         }
         let target = Replica::open(
             dir.path().join("target.db"),
-            Arc::new(Identity::create_space_for("day-sync:bookmark:4").unwrap()),
+            Arc::new(Identity::create_space_for("day-sync:bookmark:5").unwrap()),
         )
         .await
         .unwrap();
@@ -255,7 +255,7 @@ fn checkpoint_handoff_through_a_folder() {
             .await
             .unwrap();
         assert_eq!(removed, 3);
-        let old = vec![format!("day-sync-v4-{}", replicas[0].space())];
+        let old = vec![format!("day-sync-v5-{}", replicas[0].space())];
         let names = store.list(&old).await.unwrap();
         assert!(names.iter().all(|n| !n.starts_with("tx-")), "{names:?}");
         assert!(names.contains(&"retired.json".to_string()));

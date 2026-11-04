@@ -9,7 +9,7 @@ fn format_boundary_rejects_unknown_protection_and_old_encrypted_format() {
     assert!(matches!(s.validate(), Err(Error::UnsupportedFormat)));
     assert!(Identity::from_bytes(b"DAYENC02encrypted").is_err());
     let tx = wire::Transaction {
-        version: 4,
+        version: 5,
         requires: 1,
         revision: 1,
         space: id.space().into(),
@@ -56,7 +56,7 @@ fn format_boundary_rejects_unknown_protection_and_old_encrypted_format() {
     newer.revision = 3;
     let newer_bytes = id.encode_record(&newer).unwrap();
     let text = std::str::from_utf8(&newer_bytes).unwrap();
-    assert!(text.contains(r#""version":4,"requires":2,"revision":3,"#));
+    assert!(text.contains(r#""version":5,"requires":2,"revision":3,"#));
     assert_eq!(id.decode_record(&newer_bytes).unwrap(), newer);
     // Explicit default values are not canonical, so the same record has one byte form.
     let explicit = text.replace(

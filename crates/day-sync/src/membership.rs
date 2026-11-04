@@ -59,7 +59,7 @@ impl Replica {
         &self,
         store: &dyn Store,
         directory: &[String],
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<String>, Error> {
         if store.get(directory, "retired.json").await?.is_some() {
             return Err(Error::Retired);
         }
@@ -86,7 +86,7 @@ impl Replica {
             }
         }
         let names = store.list(directory).await?;
-        if names.len() > wire::MAX_OBJECTS + wire::MAX_ACTORS + 2 {
+        if names.len() > wire::MAX_LISTING {
             return Err(Error::Limit);
         }
         let known = self
@@ -96,21 +96,21 @@ impl Replica {
             .map(|o| o.filename)
             .collect::<std::collections::BTreeSet<_>>();
         let mut listed = std::collections::BTreeSet::new();
-        for name in names {
+        for name in &names {
             if !name.starts_with("member-") {
                 continue;
             }
-            member_name(&name)?;
+            member_name(name)?;
             listed.insert(name.clone());
-            if known.contains(&name) {
+            if known.contains(name) {
                 continue;
             }
             let bytes = store
-                .get(directory, &name)
+                .get(directory, name)
                 .await?
                 .ok_or_else(|| StoreError::new(StoreErrorKind::NotFound))?;
             self.receive_member(Object {
-                filename: name,
+                filename: name.clone(),
                 bytes,
             })
             .await?;
@@ -161,6 +161,6 @@ impl Replica {
                 })
                 .await?;
         }
-        Ok(())
+        Ok(names)
     }
 }

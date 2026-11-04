@@ -88,7 +88,7 @@ fn lifecycle(url: &str, provider: http::Provider, auth: bool) {
         client
             .client()
             .delete(
-                &ResourcePath::from_segments([format!("day-sync-v4-{space}")], true).unwrap(),
+                &ResourcePath::from_segments([format!("day-sync-v5-{space}")], true).unwrap(),
                 Condition::Unconditional,
             )
             .await

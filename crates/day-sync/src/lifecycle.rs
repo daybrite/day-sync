@@ -18,11 +18,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 
-const MAX_MANIFEST: usize = 2 * 1024 * 1024;
-const MAX_PACKAGE: usize = 64 * 1024 * 1024;
+const MAX_MANIFEST: usize = 40 * 1024 * 1024;
+const MAX_PACKAGE: usize = 112 * 1024 * 1024;
 const MAX_PACKAGE_ENCODING: usize = MAX_PACKAGE + 2 * 1024 * 1024;
 
-const PACKAGE_MAGIC: &[u8; 8] = b"DAYPKG04";
+const PACKAGE_MAGIC: &[u8; 8] = b"DAYPKG05";
 
 fn write_field(w: &mut impl Write, bytes: &[u8]) -> Result<(), Error> {
     let n = u32::try_from(bytes.len()).map_err(|_| Error::Limit)?;
@@ -157,28 +157,19 @@ fn cut(c: &mut dyn SqliteConnection) -> Result<(Cut, Vec<Change>), DbError> {
     {
         return Err(storage::error("sync.unsettled_cut"));
     }
+    if !rows(c, "SELECT id FROM _day_sync_genesis WHERE published=0", &[])?.is_empty() {
+        return Err(storage::error("sync.unsettled_cut"));
+    }
     // A held object's projected value is stale, so members could not attest one state.
     if storage::held(c)?.0 != 0 {
         return Err(storage::error("sync.checkpoint_requires_upgrade"));
     }
     let state = changes(c)?;
-    let mut candidates = vec![];
-    for r in rows(
-        c,
-        "SELECT object,actor,sequence,value FROM _day_sync_candidates ORDER BY object,actor,sequence",
-        &[],
-    )? {
-        candidates.push((
-            r[0].as_text()?.to_owned(),
-            r[1].as_text()?.to_owned(),
-            number(&r[2])?,
-            if r[3] == Value::Null {
-                None
-            } else {
-                Some(r[3].as_blob()?.to_vec())
-            },
-        ));
-    }
+    // Bind the cut to full replicated metadata and head anchors, not just displayed values
+    // and candidate dots. Same-frontier forks can otherwise attest an apparently equal cut.
+    let descriptor = rows(c, "SELECT descriptor FROM _day_sync_space WHERE id=1", &[])?;
+    let space = Space::from_bytes(descriptor[0][0].as_blob()?).map_err(|_| invalid())?;
+    let replicated = crate::compaction::capture(c, &space)?;
     let members = storage::members(c)?;
     Ok((
         Cut {
@@ -190,7 +181,7 @@ fn cut(c: &mut dyn SqliteConnection) -> Result<(Cut, Vec<Change>), DbError> {
             roster_hash: wire::digest(&identity::encode(&members).map_err(|_| invalid())?),
             frontier: storage::frontier(c)?,
             state_hash: state_hash(&state).map_err(|_| invalid())?,
-            candidates_hash: wire::digest(&identity::encode(&candidates).map_err(|_| invalid())?),
+            candidates_hash: wire::digest(&identity::encode(&replicated).map_err(|_| invalid())?),
         },
         state,
     ))
@@ -198,7 +189,7 @@ fn cut(c: &mut dyn SqliteConnection) -> Result<(Cut, Vec<Change>), DbError> {
 fn verify_receipts(body: &Body) -> Result<(), Error> {
     body.source.validate()?;
     body.destination.validate()?;
-    if body.version != 4
+    if body.version != 5
         || body.cut.space != body.source.id
         || body.cut.profile != body.source.profile
         || body.destination.profile != body.source.profile
@@ -258,7 +249,7 @@ impl Package {
     pub fn write_to(&self, mut writer: impl Write) -> Result<(), Error> {
         if self.byte_count() > MAX_PACKAGE
             || self.manifest.len() > MAX_MANIFEST
-            || self.objects.len() > wire::MAX_OBJECTS + wire::MAX_ACTORS
+            || self.objects.len() > 64
         {
             return Err(Error::Limit);
         }
@@ -270,7 +261,7 @@ impl Package {
             .write_all(&(self.objects.len() as u32).to_be_bytes())
             .map_err(|_| Error::InvalidWire)?;
         for object in &self.objects {
-            if object.filename.len() > 256 || object.bytes.len() > crate::envelope::MAX_RECORD {
+            if object.filename.len() > 256 || object.bytes.len() > crate::state::PART_BYTES {
                 return Err(Error::Limit);
             }
             write_field(&mut writer, object.filename.as_bytes())?;
@@ -284,7 +275,7 @@ impl Package {
         magic(&mut reader, PACKAGE_MAGIC)?;
         let manifest = read_field(&mut reader, MAX_MANIFEST)?;
         let count = read_number(&mut reader)?;
-        if count > wire::MAX_OBJECTS + wire::MAX_ACTORS {
+        if count > 64 {
             return Err(Error::Limit);
         }
         let mut remaining = MAX_PACKAGE - manifest.len();
@@ -292,7 +283,7 @@ impl Package {
         for _ in 0..count {
             let filename =
                 String::from_utf8(read_field(&mut reader, 256)?).map_err(|_| Error::InvalidWire)?;
-            let bytes = read_field(&mut reader, remaining.min(crate::envelope::MAX_RECORD))?;
+            let bytes = read_field(&mut reader, remaining.min(crate::state::PART_BYTES))?;
             remaining -= bytes.len();
             objects.push(Object { filename, bytes });
         }
@@ -328,8 +319,8 @@ impl Package {
         }
         verify_receipts(&m.body)?;
         if m.body.objects.len() != self.objects.len()
-            || self.objects.len() > wire::MAX_OBJECTS + wire::MAX_ACTORS
-            || m.body.obsolete.len() > wire::MAX_OBJECTS
+            || self.objects.len() > 64
+            || m.body.obsolete.len() > wire::MAX_LISTING
         {
             return Err(Error::Limit);
         }
@@ -347,13 +338,15 @@ impl Package {
                 if hash != entry.hash {
                     return Err(Error::Integrity);
                 }
-            } else {
+            } else if !crate::state::object_name(&entry.name) {
                 crate::membership::member_name(&entry.name)?;
             }
         }
         let mut obsolete = BTreeSet::new();
         for name in &m.body.obsolete {
-            wire::parse_filename(name)?;
+            if !crate::state::object_name(name) {
+                wire::parse_filename(name)?;
+            }
             if !obsolete.insert(name) {
                 return Err(Error::InvalidWire);
             }
@@ -363,7 +356,7 @@ impl Package {
     fn base(&self, pin: &CheckpointPin) -> Result<Vec<String>, Error> {
         self.verify(pin)?;
         Ok(vec![
-            format!("day-handoff-v4-{}", pin.source.space()),
+            format!("day-handoff-v5-{}", pin.source.space()),
             format!("cp-{}", pin.hash),
         ])
     }
@@ -374,7 +367,7 @@ impl Package {
         // Bootstrap receivers immediately treat the baseline as observed remote history.
         // Publish it in the active epoch BEFORE exposing the checkpoint manifest, so their
         // first normal sync cannot mistake a partially published baseline for server rollback.
-        let active = vec![format!("day-sync-v4-{}", self.destination(pin)?.space())];
+        let active = vec![format!("day-sync-v5-{}", self.destination(pin)?.space())];
         store.ensure_directory(&active).await?;
         put_verified(
             store,
@@ -383,15 +376,33 @@ impl Package {
             &self.destination(pin)?.to_bytes()?,
         )
         .await?;
-        for o in &self.objects {
+        for o in self
+            .objects
+            .iter()
+            .filter(|o| !crate::state::is_manifest(&o.filename))
+            .chain(
+                self.objects
+                    .iter()
+                    .filter(|o| crate::state::is_manifest(&o.filename)),
+            )
+        {
             put_verified(store, &active, &o.filename, &o.bytes).await?;
         }
         store.ensure_directory(&base).await?;
-        for o in &self.objects {
+        for o in self
+            .objects
+            .iter()
+            .filter(|o| !crate::state::is_manifest(&o.filename))
+            .chain(
+                self.objects
+                    .iter()
+                    .filter(|o| crate::state::is_manifest(&o.filename)),
+            )
+        {
             put_verified(store, &base, &o.filename, &o.bytes).await?;
         }
         put_verified(store, &base, "manifest.json", &self.manifest).await?;
-        let old = vec![format!("day-sync-v4-{}", pin.source.id)];
+        let old = vec![format!("day-sync-v5-{}", pin.source.id)];
         store.ensure_directory(&old).await?;
         put_verified(store, &old, "retired.json", &identity::encode(pin)?).await
     }
@@ -400,7 +411,7 @@ impl Package {
             return Err(Error::InvalidWire);
         }
         let base = vec![
-            format!("day-handoff-v4-{}", pin.source.space()),
+            format!("day-handoff-v5-{}", pin.source.space()),
             format!("cp-{}", pin.hash),
         ];
         let manifest = get_required(store, &base, "manifest.json").await?;
@@ -412,7 +423,7 @@ impl Package {
             return Err(Error::Integrity);
         }
         verify_receipts(&m.body)?;
-        if m.body.objects.len() > wire::MAX_OBJECTS + wire::MAX_ACTORS {
+        if m.body.objects.len() > 64 {
             return Err(Error::Limit);
         }
         let mut size = manifest.len();
@@ -424,7 +435,7 @@ impl Package {
             }
             if entry.name.starts_with("tx-") {
                 wire::parse_filename(&entry.name)?;
-            } else {
+            } else if !crate::state::object_name(&entry.name) {
                 crate::membership::member_name(&entry.name)?;
             }
             let bytes = get_required(store, &base, &entry.name).await?;
@@ -440,87 +451,66 @@ impl Package {
         p.verify(pin)?;
         Ok(p)
     }
-    fn transactions(
+    fn baseline(
         &self,
         pin: &CheckpointPin,
         identity: &Identity,
-    ) -> Result<Vec<wire::Transaction>, Error> {
+    ) -> Result<crate::state::State, Error> {
         let m = self.verify(pin)?;
         if identity.space != m.body.destination {
-            return Err(Error::Integrity);
+            return Err(Error::WrongSpace);
         }
-        let members = self
+        let members: Vec<_> = self
             .objects
             .iter()
             .filter(|o| o.filename.starts_with("member-"))
-            .map(|o| o.bytes.clone())
-            .collect::<Vec<_>>();
-        let mut actors = BTreeSet::new();
-        for bytes in &members {
-            let member = Identity::from_bytes(bytes)?;
-            if member.space != m.body.destination || !actors.insert(member.actor) {
-                return Err(Error::Integrity);
-            }
-        }
-        let mut txs = vec![];
-        for o in self
-            .objects
-            .iter()
-            .filter(|o| o.filename.starts_with("tx-"))
-        {
-            let tx = identity.decode_record(&o.bytes)?;
-            if tx.filename(&wire::digest(&o.bytes)) != o.filename {
-                return Err(Error::Integrity);
-            }
-            txs.push(tx);
-        }
-        txs.sort_by_key(|t| t.sequence);
-        if actors.len() != 1 {
+            .collect();
+        if members.len() != 1 {
             return Err(Error::InvalidWire);
         }
-        let author = actors.into_iter().next().ok_or(Error::InvalidWire)?;
-        let mut previous = None;
-        let mut state = BTreeMap::new();
-        for (i, tx) in txs.iter().enumerate() {
-            let context = if i == 0 {
-                BTreeMap::new()
-            } else {
-                BTreeMap::from([(author.clone(), i as u64)])
-            };
-            if tx.actor != author
-                || tx.sequence != (i + 1) as u64
-                || tx.lamport != tx.sequence
-                || tx.context != context
-                || tx.previous != previous
-            {
-                return Err(Error::InvalidWire);
-            }
-            previous = Some(
-                wire::parse_filename(
-                    &self
-                        .objects
-                        .iter()
-                        .find(|o| {
-                            o.filename
-                                .starts_with(&format!("tx-{}.{:020}.", author, tx.sequence))
-                        })
-                        .ok_or(Error::InvalidWire)?
-                        .filename,
-                )?
-                .2,
-            );
-            for change in &tx.changes {
-                state.insert(change.id.clone(), change.value.clone());
-            }
+        let author = Identity::from_bytes(&members[0].bytes)?;
+        if author.space != identity.space {
+            return Err(Error::WrongSpace);
         }
-        let state = state
-            .into_iter()
-            .map(|(id, value)| Change { id, value })
-            .collect::<Vec<_>>();
-        if state_hash(&state)? != m.body.cut.state_hash {
+        let manifests: Vec<_> = self
+            .objects
+            .iter()
+            .filter(|o| crate::state::is_manifest(&o.filename))
+            .collect();
+        if manifests.len() != 1 {
+            return Err(Error::InvalidWire);
+        }
+        let object = manifests[0];
+        let manifest =
+            crate::state::Manifest::decode(&object.filename, &object.bytes, &identity.space)?;
+        if manifest.kind != "genesis" || self.objects.len() != manifest.parts.len() + 2 {
+            return Err(Error::InvalidWire);
+        }
+        let mut body = vec![];
+        for i in 0..manifest.parts.len() {
+            let part = self
+                .objects
+                .iter()
+                .find(|o| o.filename == manifest.part_name(i))
+                .ok_or(Error::InvalidWire)?;
+            body.extend_from_slice(&part.bytes);
+        }
+        let state = manifest.verify(&body)?;
+        if state.heads.len() != 1 || state.sequence(&author.actor) != 1 {
+            return Err(Error::InvalidWire);
+        }
+        let changes: Vec<_> = state
+            .objects
+            .iter()
+            .map(|(id, cs)| Change {
+                id: id.clone(),
+                value: cs[0].value.clone(),
+            })
+            .collect();
+        if state_hash(&changes)? != m.body.cut.state_hash {
             return Err(Error::Integrity);
         }
-        Ok(txs)
+        Ok(state)
     }
 }
 impl Replica {
@@ -530,6 +520,13 @@ impl Replica {
         if !wire::valid_id(token) {
             return Err(Error::InvalidWire);
         }
+        if self
+            .running
+            .swap(true, std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(Error::Busy);
+        }
+        let _guard = crate::RunGuard(self.running.clone());
         let token = token.to_owned();
         self.db
             .write_with_origin(WriteOrigin::Maintenance, move |db| {
@@ -542,12 +539,8 @@ impl Replica {
                             return Err(storage::error("sync.other_fence"));
                         }
                     } else {
-                        // Refuse known unsupported state sizes BEFORE making the fence
-                        // irreversible. This is a record-count preflight, not a guarantee
-                        // against subsequent package-byte or unsettled-peer limits.
-                        if changes(c)?.len() > 65_536 {
-                            return Err(storage::error("sync.checkpoint_state_capacity"));
-                        }
+                        // Package capacity depends on the final common cut, not a lifetime
+                        // record count. Freeze itself is an irreversible local barrier.
                         c.execute("INSERT INTO _day_sync_fence VALUES(1,?)", &[text(token)])?;
                     }
                     Ok(())
@@ -577,7 +570,16 @@ impl Replica {
         }
         let (source_cut,state,members,obsolete,existing)=self.db.read(|db|db.try_with_connection(|c|{
             let (cut,state)=cut(c)?;
-            let obsolete=rows(c,"SELECT actor,sequence,hash FROM _day_sync_transactions ORDER BY actor,sequence",&[])?.iter().map(|r|Ok(format!("tx-{}.{:020}.{}.ds4",r[0].as_text()?,number(&r[1])?,r[2].as_text()?))).collect::<Result<Vec<_>,DbError>>()?;
+            let mut obsolete=rows(c,"SELECT actor,sequence,hash FROM _day_sync_transactions ORDER BY actor,sequence",&[])?.iter().map(|r|Ok(format!("tx-{}.{:020}.{}.ds5",r[0].as_text()?,number(&r[1])?,r[2].as_text()?))).collect::<Result<Vec<_>,DbError>>()?;
+            if !rows(c,"SELECT name FROM _day_sync_snapshots",&[])?.is_empty()
+                && rows(c,"SELECT token FROM _day_sync_listing_fence",&[])?.first().map(|r|r[0].as_text()).transpose()?!=Some(cut.fence.as_str()) {
+                    return Err(storage::error("sync.frozen_listing_required"));
+                }
+            for row in rows(c,"SELECT name FROM _day_sync_listing ORDER BY name",&[])? {
+                let name=row[0].as_text()?;
+                if wire::parse_filename(name).is_ok() || crate::state::object_name(name) {obsolete.push(name.to_owned());}
+            }
+            obsolete.sort(); obsolete.dedup();
             let existing=rows(c,"SELECT manifest FROM _day_sync_handoff WHERE id=1",&[])?.first().map(|r|r[0].as_blob().map(Vec::from)).transpose()?;
             Ok((cut,state,storage::members(c)?,obsolete,existing))
         })).await?;
@@ -587,7 +589,7 @@ impl Replica {
         receipts.sort_by(|a, b| a.actor.cmp(&b.actor));
         retired.sort();
         let mut body = Body {
-            version: 4,
+            version: 5,
             source: self.space_descriptor(),
             cut: source_cut.clone(),
             members,
@@ -614,16 +616,16 @@ impl Replica {
             return Err(Error::Integrity);
         }
         if existing.is_none() {
-            if target.snapshot().await?.transactions == 0 && !state.is_empty() {
-                target.commit(state.clone()).await?;
-            }
+            target
+                .seed_genesis(state.clone(), source_cut.state_hash.clone())
+                .await?;
             let current = target.db.read(|db| db.try_with_connection(changes)).await?;
             if current != state {
                 return Err(Error::Integrity);
             }
         }
         let mut objects = target.member_objects().await?;
-        objects.extend(target.local_objects().await?);
+        objects.extend(target.genesis_objects().await?);
         objects.sort_by(|a, b| a.filename.cmp(&b.filename));
         let manifest = if let Some(bytes) = existing {
             let m: Manifest = identity::decode(&bytes, MAX_MANIFEST)?;
@@ -652,7 +654,7 @@ impl Replica {
         };
         let pin = package.pin()?;
         package.verify(&pin)?;
-        package.transactions(&pin, &target.identity)?;
+        package.baseline(&pin, &target.identity)?;
         let hash = pin.hash.clone();
         self.db
             .write_with_origin(WriteOrigin::Maintenance, move |db| {
@@ -686,11 +688,14 @@ impl Replica {
         pin: &CheckpointPin,
     ) -> Result<(), Error> {
         let manifest = package.verify(pin)?;
-        let txs = package.transactions(pin, &self.identity)?;
+        let baseline = package.baseline(pin, &self.identity)?;
         if let Some(app) = &self.application {
-            for tx in txs.iter().filter(|tx| tx.requires <= app.revision()) {
-                for change in &tx.changes {
-                    app.validate(change)?;
+            for (id, cs) in &baseline.objects {
+                for c in cs.iter().filter(|c| c.requires <= app.revision()) {
+                    app.validate(&Change {
+                        id: id.clone(),
+                        value: c.value.clone(),
+                    })?;
                 }
             }
         }
@@ -719,6 +724,7 @@ impl Replica {
                     if number(&rows(c, "SELECT count(*) FROM _day_sync_transactions", &[])?[0][0])?
                         != 0
                         || !changes(c)?.is_empty()
+                        || !storage::frontier(c)?.is_empty()
                     {
                         return Err(storage::error("sync.bootstrap_requires_empty"));
                     }
@@ -727,30 +733,19 @@ impl Replica {
                             storage::insert_member(c, &object.bytes, &identity)?;
                         }
                     }
-                    for tx in txs {
-                        if tx.actor == identity.actor() {
-                            return Err(storage::error(
-                                "sync.restored_actor_requires_new_identity",
-                            ));
-                        }
-                        let object = objects
-                            .iter()
-                            .find(|o| {
-                                o.filename
-                                    .starts_with(&format!("tx-{}.{:020}.", tx.actor, tx.sequence))
-                            })
-                            .ok_or_else(invalid)?;
-                        storage::reserve(
-                            c,
-                            &tx,
-                            &wire::digest(&object.bytes),
-                            &object.bytes,
-                            false,
+                    if baseline.heads.contains_key(identity.actor()) {
+                        return Err(storage::error("sync.restored_actor_requires_new_identity"));
+                    }
+                    let old = crate::compaction::capture(c, &identity.space)?;
+                    crate::compaction::store_state(c, &baseline, &old, app.as_deref())?;
+                    for o in objects
+                        .iter()
+                        .filter(|o| crate::state::is_manifest(&o.filename))
+                    {
+                        c.execute(
+                            "INSERT INTO _day_sync_snapshots(name,manifest,loaded) VALUES(?,?,0)",
+                            &[text(&o.filename), Value::Blob(o.bytes.clone())],
                         )?;
-                        if !storage::ready(c, &tx, &identity)? {
-                            return Err(invalid());
-                        }
-                        storage::merge(c, &tx, true, app.as_deref())?;
                     }
                     if state_hash(&changes(c)?).map_err(|_| invalid())?
                         != manifest.body.cut.state_hash
@@ -806,7 +801,7 @@ impl Replica {
             })
             .await?;
         Package::fetch(store, pin).await?;
-        let directory = vec![format!("day-sync-v4-{}", self.space)];
+        let directory = vec![format!("day-sync-v5-{}", self.space)];
         let mut count = 0;
         for name in &manifest.body.obsolete {
             if store.delete(&directory, name).await? {
@@ -829,7 +824,7 @@ async fn get_required(
 }
 /// Publish exact bytes under `name`: skip when they are already there, otherwise write and read
 /// back. A failed write whose read back shows the bytes counts as published.
-async fn put_verified(
+pub(crate) async fn put_verified(
     store: &dyn Store,
     directory: &[String],
     name: &str,
@@ -857,7 +852,7 @@ impl Package {
     pub fn verify_backup(bytes: &[u8], pin: &CheckpointPin) -> Result<VerifiedBackup, Error> {
         let package = Self::from_bytes(bytes, pin)?;
         let id = Identity::join(package.destination(pin)?)?;
-        package.transactions(pin, &id)?;
+        package.baseline(pin, &id)?;
         Ok(VerifiedBackup {
             checkpoint_hash: pin.hash.clone(),
         })
@@ -892,13 +887,12 @@ impl Package {
             return Err(Error::WrongSpace);
         }
 
-        let txs = self.transactions(pin, &source)?;
-        let mut state = BTreeMap::new();
-        for tx in txs {
-            for c in tx.changes {
-                state.insert(c.id, c.value);
-            }
-        }
+        let baseline = self.baseline(pin, &source)?;
+        let state: BTreeMap<_, _> = baseline
+            .objects
+            .into_iter()
+            .map(|(id, cs)| (id, cs[0].value.clone()))
+            .collect();
         Ok(Recovered {
             identity,
             hash: pin.hash.clone(),
@@ -924,7 +918,7 @@ impl Recovered {
             return Err(Error::WrongSpace);
         }
         replica
-            .commit_inner(self.changes.clone(), Some(self.hash.clone()))
+            .seed_genesis(self.changes.clone(), self.hash.clone())
             .await
     }
 }

@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_BYTES: usize = 256 * 1024;
 pub const MAX_CHANGES: usize = 128;
 pub const MAX_ACTORS: usize = 32;
-pub const MAX_OBJECTS: usize = 4096;
+pub const COMPACT_AFTER: u64 = 64;
+pub const COMPACT_RETAINED: u64 = 4096;
+pub const MAX_LISTING: usize = 139_264;
 /// Highest application record revision the wire accepts.
 pub const MAX_REVISION: u32 = 65_535;
 
@@ -70,7 +72,7 @@ impl Transaction {
         Ok(bytes)
     }
     fn validate(&self) -> Result<(), Error> {
-        if self.version != 4
+        if self.version != 5
             || self.requires == 0
             || self.requires > self.revision
             || self.revision > MAX_REVISION
@@ -108,13 +110,13 @@ impl Transaction {
         Ok(())
     }
     pub fn filename(&self, hash: &str) -> String {
-        format!("tx-{}.{:020}.{hash}.ds4", self.actor, self.sequence)
+        record_name(&self.actor, self.sequence, hash)
     }
 }
 pub(crate) fn parse_filename(name: &str) -> Result<(String, u64, String), Error> {
     let mut p = name
         .strip_prefix("tx-")
-        .and_then(|s| s.strip_suffix(".ds4"))
+        .and_then(|s| s.strip_suffix(".ds5"))
         .ok_or(Error::InvalidWire)?
         .split('.');
     let actor = p.next().ok_or(Error::InvalidWire)?;
@@ -131,4 +133,9 @@ pub(crate) fn parse_filename(name: &str) -> Result<(String, u64, String), Error>
         return Err(Error::InvalidWire);
     }
     Ok((actor.into(), n, hash.into()))
+}
+
+/// Canonical identity of a validated record; also used for local receipt lookup.
+pub(crate) fn record_name(actor: &str, sequence: u64, hash: &str) -> String {
+    format!("tx-{actor}.{sequence:020}.{hash}.ds5")
 }

@@ -95,7 +95,7 @@ fn two_replicas_converge_through_a_memory_store() {
         assert_eq!(sa.candidates, sb.candidates);
         assert_eq!(sa.candidates.len(), 2);
 
-        let directory = vec![format!("day-sync-v4-{}", owner.space())];
+        let directory = vec![format!("day-sync-v5-{}", owner.space())];
         let objects = store.objects(&directory);
         assert_eq!(objects.keys().filter(|n| n.starts_with("tx-")).count(), 3);
         assert_eq!(

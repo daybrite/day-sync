@@ -41,6 +41,7 @@ struct Store {
     puts: usize,
     collections: Vec<String>,
     mkdir_status: Option<u16>,
+    delete_status: Option<u16>,
 }
 fn setup() -> (WebDavStore, Arc<Mutex<Store>>, Simulation) {
     let store = Arc::new(Mutex::new(Store::default()));
@@ -63,6 +64,7 @@ fn setup() -> (WebDavStore, Arc<Mutex<Store>>, Simulation) {
                     _=>{s.files.insert(path,bytes);s.fault=fault;Ok(Reply::new(201,vec![]))}
                 }
             },
+            "DELETE"=>{if let Some(code)=s.delete_status.take(){Ok(Reply::new(code,vec![]).header("Retry-After","120"))}else{s.files.remove(&path);Ok(Reply::new(204,vec![]))}},
             "GET"=>{
                 let Some(bytes)=s.files.get(&path).cloned() else{return Ok(Reply::new(404,vec![]));};
                 match if path.contains("/tx-"){s.fault}else{Fault::None} {
@@ -344,7 +346,12 @@ fn server_history_loss_is_reported_without_discarding_local_state() {
             a.sync(&client).await,
             Err(day_sync::Error::RemoteHistoryMissing)
         ));
-        assert_eq!(a.snapshot().await.unwrap(), before);
+        let after = a.snapshot().await.unwrap();
+        assert_eq!(after.candidates, before.candidates);
+        assert_eq!(after.frontier, before.frontier);
+        assert_eq!(after.transactions, 0); // repaired snapshot now durably publishes the prefix
+        a.sync(&client).await.unwrap(); // recovery no longer depends on manual restoration
+
         state.lock().unwrap().files.insert(lost.0, lost.1);
         a.sync(&client).await.unwrap();
         a.close().await.unwrap();
@@ -440,5 +447,57 @@ fn partial_member_upload_is_repaired_before_data_is_published() {
         );
         a.close().await.unwrap();
         b.close().await.unwrap();
+    });
+}
+
+#[test]
+fn snapshot_deletion_respects_webdav_contention_rate_limits_and_quota_errors() {
+    block_on(async {
+        for status in [423, 429, 507] {
+            let d = tempfile::tempdir().unwrap();
+            let fixture = Fixture::new().await;
+            let (client, state, _) = setup();
+            let shared = state.clone();
+            let armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let flag = armed.clone();
+            let a = support::open_with_probe(
+                d.path().join("a"),
+                &fixture,
+                Arc::new(move |point| {
+                    if point == Checkpoint::SnapshotVerified
+                        && flag.swap(false, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        shared.lock().unwrap().delete_status = Some(status);
+                    }
+                    Ok(())
+                }),
+            )
+            .await
+            .unwrap();
+            a.commit(vec![edit()]).await.unwrap();
+            a.sync(&client).await.unwrap();
+            let error = a.compact(&client).await.unwrap_err();
+            assert!(
+                matches!(error,day_sync::Error::Store(ref e) if e.retry_after==Some(std::time::Duration::from_secs(120))),
+                "{error:?}"
+            );
+            assert!(
+                state
+                    .lock()
+                    .unwrap()
+                    .files
+                    .keys()
+                    .any(|n| n.contains("/tx-"))
+            );
+            a.compact(&client).await.unwrap();
+            let b = open(d.path().join("b"), &fixture).await.unwrap();
+            b.sync(&client).await.unwrap();
+            assert_eq!(
+                a.snapshot().await.unwrap().candidates,
+                b.snapshot().await.unwrap().candidates
+            );
+            a.close().await.unwrap();
+            b.close().await.unwrap();
+        }
     });
 }

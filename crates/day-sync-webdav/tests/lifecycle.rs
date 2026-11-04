@@ -248,7 +248,7 @@ fn every_publication_boundary_can_retry_and_gc_survives_lost_delete_ack() {
                         .unwrap()
                         .files
                         .keys()
-                        .all(|p| !p.contains(&format!("day-sync-v4-{}/tx-", rs[0].space())))
+                        .all(|p| !p.contains(&format!("day-sync-v5-{}/tx-", rs[0].space())))
                 );
                 Package::fetch(&client, &pin).await.unwrap();
             }
@@ -433,7 +433,7 @@ fn local_schema_version_prevents_legacy_fence_bypass() {
         let version: i64 = raw
             .query_row("SELECT version FROM _day_sync_config", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_ne!(
             version, 2,
             "the legacy opener requires version 2 and must refuse this store"

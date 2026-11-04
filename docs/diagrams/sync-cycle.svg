@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="510" viewBox="0 0 960 510" role="img" aria-labelledby="title description">
+<!-- Copyright © The Daybrite Project; SPDX-License-Identifier: MPL-2.0 -->
+<title id="title">From a local edit to a sync attempt</title><desc id="description">An atomic local commit saves the edit and outgoing record. A sync attempt validates remote evidence, merges available changes, publishes pending work, and reports remaining work.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#526477"/></marker></defs>
+<rect width="960" height="510" rx="16" fill="#ffffff"/>
+<g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#182c40">
+<text x="32" y="39" font-size="23" font-weight="700">From a local edit to a sync attempt</text>
+<rect x="32" y="78" width="896" height="95" rx="12" fill="#edf7f1" stroke="#8bb69c" stroke-width="1.5"/>
+<text x="50" y="109" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">Local database transaction</text>
+<text x="50" y="139" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Save the application edit and the outgoing record together.</text>
+<path d="M 480 175 L 480 211 L 166 211 L 166 223" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="32" y="226" width="270" height="140" rx="12" fill="#edf4fc" stroke="#9bb5d3" stroke-width="1.5"/>
+<text x="50" y="257" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">Check storage</text>
+<text x="50" y="287" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Check endpoint and roster.</text>
+<text x="50" y="312" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Read snapshots and records.</text>
+<text x="50" y="337" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Check visible fork evidence.</text>
+<rect x="345" y="226" width="270" height="140" rx="12" fill="#edf4fc" stroke="#9bb5d3" stroke-width="1.5"/>
+<text x="363" y="257" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">Merge available state</text>
+<text x="363" y="287" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Validate incoming data.</text>
+<text x="363" y="312" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Apply ready changes.</text>
+<text x="363" y="337" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Wait for missing inputs.</text>
+<rect x="658" y="226" width="270" height="140" rx="12" fill="#edf4fc" stroke="#9bb5d3" stroke-width="1.5"/>
+<text x="676" y="257" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">Publish pending work</text>
+<text x="676" y="287" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Reconcile existing uploads.</text>
+<text x="676" y="312" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Send records or a snapshot.</text>
+<text x="676" y="337" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Perform eligible cleanup.</text>
+<path d="M 304 296 L 342 296" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 617 296 L 655 296" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 793 368 L 793 404 L 600 404" fill="none" stroke="#526477" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="32" y="384" width="568" height="90" rx="12" fill="#f3f5f7" stroke="#b1bdc8" stroke-width="1.5"/>
+<text x="50" y="415" font-size="18" fill="#354c61" font-weight="650" text-anchor="start">Report progress</text>
+<text x="50" y="445" font-size="17" fill="#354c61" font-weight="400" text-anchor="start">Schedule another attempt for deferred work or retries.</text>
+</g></svg>

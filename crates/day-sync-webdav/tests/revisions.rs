@@ -45,7 +45,7 @@ impl Application for News {
     }
     fn install(&self, c: &mut dyn SqliteConnection) -> Result<(), DbError> {
         c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,kind TEXT NOT NULL,guid TEXT NOT NULL,value INTEGER NOT NULL,note TEXT)",
+            "CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,kind TEXT NOT NULL,guid TEXT NOT NULL,value INTEGER NOT NULL,note TEXT); CREATE TABLE IF NOT EXISTS holds(id TEXT PRIMARY KEY,revision INTEGER NOT NULL)",
         )
     }
     fn capture(&self, _: &mut dyn SqliteConnection) -> Result<Vec<Change>, DbError> {
@@ -90,6 +90,19 @@ impl Application for News {
             }
         }
         Ok(0)
+    }
+    fn held(
+        &self,
+        c: &mut dyn SqliteConnection,
+        id: &str,
+        required: Option<u32>,
+    ) -> Result<(), DbError> {
+        if let Some(revision) = required {
+            c.execute("INSERT INTO holds VALUES(?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision", &[Value::Text(id.into()), Value::Int(revision.into())])?;
+        } else {
+            c.execute("DELETE FROM holds WHERE id=?", &[Value::Text(id.into())])?;
+        }
+        Ok(())
     }
     fn project(
         &self,
@@ -208,7 +221,7 @@ fn scenario(client: WebDavStore) {
     block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let space = Identity::create_space_for(PROFILE).unwrap().space;
-        let folder = format!("day-sync-v4-{}", space.id);
+        let folder = format!("day-sync-v5-{}", space.id);
         let ids: Vec<Arc<Identity>> = (0..3)
             .map(|_| Arc::new(Identity::join(space.clone()).unwrap()))
             .collect();
@@ -238,12 +251,12 @@ fn scenario(client: WebDavStore) {
             .collect();
         assert_eq!(a_records.len(), 2);
         assert!(
-            a_records[0].contains(r#""version":4,"revision":2,"#),
+            a_records[0].contains(r#""version":5,"revision":2,"#),
             "{}",
             a_records[0]
         );
         assert!(
-            a_records[1].contains(r#""version":4,"requires":2,"revision":2,"#),
+            a_records[1].contains(r#""version":5,"requires":2,"revision":2,"#),
             "{}",
             a_records[1]
         );
@@ -326,6 +339,18 @@ fn scenario(client: WebDavStore) {
                 .count(),
             2
         );
+
+        // The oldest build must carry unreadable state through actual deletion and fresh bootstrap.
+        b.compact(&client).await.unwrap();
+        let newcomer = Arc::new(Identity::join(ids[0].space.clone()).unwrap());
+        let fresh = device(&dir.path().join("snapshot-bootstrap.db"), &newcomer, 3).await;
+        fresh.sync(&client).await.unwrap();
+        assert_eq!(items(&fresh).await, items(&c).await);
+        assert_eq!(
+            fresh.snapshot().await.unwrap().candidates,
+            c_snapshot.candidates
+        );
+        fresh.close().await.unwrap();
 
         // A holds g1, so it refuses to take part in an epoch checkpoint until it is upgraded.
         // (Checked on a copy: freezing is irreversible.)
@@ -472,5 +497,109 @@ fn held_objects_agree_at_one_revision_whatever_the_arrival_order() {
         for r in [x, y] {
             r.close().await.unwrap();
         }
+    });
+}
+
+#[test]
+fn snapshot_bootstrap_distinguishes_held_state_from_a_local_display_cache() {
+    block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = Arc::new(Identity::create_space_for(PROFILE).unwrap());
+        let older = Arc::new(Identity::join(identity.space.clone()).unwrap());
+        let fresh_id = Arc::new(Identity::join(identity.space.clone()).unwrap());
+        let store = MemoryStore::new();
+        let a = device(&dir.path().join("new"), &identity, 3).await;
+        let b = device(&dir.path().join("old"), &older, 1).await;
+        a.commit(vec![choice("star", "held", true, None)])
+            .await
+            .unwrap();
+        a.sync(&store).await.unwrap();
+        b.sync(&store).await.unwrap();
+        let cached = items(&b).await;
+        a.commit(vec![choice(
+            "star",
+            "held",
+            true,
+            Some("synthetic new note"),
+        )])
+        .await
+        .unwrap();
+        a.compact(&store).await.unwrap();
+        b.sync(&store).await.unwrap();
+        let path = dir.path().join("fresh");
+        let fresh = device(&path, &fresh_id, 1).await;
+        fresh.sync(&store).await.unwrap();
+        assert_eq!(items(&b).await, cached);
+        assert!(items(&fresh).await.is_empty());
+        for r in [&b, &fresh] {
+            assert_eq!(r.snapshot().await.unwrap().held, 1);
+            let held = r
+                .worker()
+                .read(|db| {
+                    db.try_with_connection(|c| {
+                        let mut found = false;
+                        c.query("SELECT revision FROM holds", &[], &mut |row| {
+                            assert_eq!(row.get(0), Value::Int(3));
+                            found = true;
+                        })?;
+                        Ok(found)
+                    })
+                })
+                .await
+                .unwrap();
+            assert!(held);
+        }
+        fresh.close().await.unwrap();
+        let upgraded = device(&path, &fresh_id, 3).await;
+        upgraded.apply_ready().await.unwrap();
+        assert_eq!(items(&upgraded).await, items(&a).await);
+        upgraded
+            .worker()
+            .read(|db| {
+                db.try_with_connection(|c| {
+                    c.query("SELECT count(*) FROM holds", &[], &mut |row| {
+                        assert_eq!(row.get(0), Value::Int(0))
+                    })
+                })
+            })
+            .await
+            .unwrap();
+        for r in [&a, &b, &upgraded] {
+            r.close().await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn checkpoint_receipts_distinguish_equal_value_histories_with_different_revisions() {
+    block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        // Deliberately cloned synthetic identity on isolated stores: values and dots agree,
+        // but the writer revision and hash-chain heads differ.
+        let identity = Arc::new(Identity::create_space_for(PROFILE).unwrap());
+        let a = device(&dir.path().join("a"), &identity, 1).await;
+        let b = device(&dir.path().join("b"), &identity, 2).await;
+        let sa = MemoryStore::new();
+        let sb = MemoryStore::new();
+        let token = uuid::Uuid::new_v4().to_string();
+        for (r, store) in [(&a, &sa), (&b, &sb)] {
+            r.commit(vec![choice("star", "same", true, None)])
+                .await
+                .unwrap();
+            r.sync(store).await.unwrap();
+            r.compact(store).await.unwrap();
+            r.freeze(&token).await.unwrap();
+        }
+        assert_eq!(
+            a.snapshot().await.unwrap().candidates,
+            b.snapshot().await.unwrap().candidates
+        );
+        let left = a.attest().await.unwrap().cut;
+        let right = b.attest().await.unwrap().cut;
+        assert_eq!(left.frontier, right.frontier);
+        assert_eq!(left.state_hash, right.state_hash);
+        assert_ne!(left.candidates_hash, right.candidates_hash);
+        a.close().await.unwrap();
+        b.close().await.unwrap();
     });
 }

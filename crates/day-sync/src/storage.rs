@@ -76,7 +76,7 @@ pub(crate) fn install(c: &mut dyn SqliteConnection, identity: &Identity) -> Resu
             &[],
         )?;
         if let Some(row) = exists.first() {
-            if number(&row[1])? != 4 {
+            if number(&row[1])? != 5 {
                 return Err(error("sync.unsupported_schema"));
             }
             if row[0].as_text()? != space || row[2].as_text()? != identity.actor() {
@@ -88,7 +88,7 @@ pub(crate) fn install(c: &mut dyn SqliteConnection, identity: &Identity) -> Resu
             }
             c.execute(concat!(
 "INSERT INTO ",
-"_day_sync_config(id,version,space,actor,next_sequence,clock) VALUES(1,4,?,?,1,0)"
+"_day_sync_config(id,version,space,actor,next_sequence,clock) VALUES(1,5,?,?,1,0)"
 ),&[text(space),text(identity.actor())])?;
         }
         let descriptor = identity.space.to_bytes().map_err(|_| error("sync.space"))?;
@@ -213,7 +213,7 @@ impl TransactionParticipant for Journal {
                             rows(
                                 c,
                                 concat!(
-                                    "SELECT hash FROM _day_sync_transactions WHERE actor=? AND ",
+                                    "SELECT hash FROM _day_sync_frontiers WHERE actor=? AND ",
                                     "sequence=?"
                                 ),
                                 &[text(&actor), int(sequence - 1)],
@@ -270,7 +270,7 @@ impl TransactionParticipant for Journal {
                         changes.push(change);
                     }
                     let tx = Transaction {
-                        version: 4,
+                        version: 5,
                         requires: requires.unwrap_or(1),
                         revision,
                         space: cfg[0].as_text()?.into(),
@@ -325,33 +325,14 @@ pub(crate) fn reserve(
     bytes: &[u8],
     local: bool,
 ) -> Result<(), DbError> {
-    if number(&rows(c, "SELECT count(*) FROM _day_sync_transactions", &[])?[0][0])?
-        >= wire::MAX_OBJECTS as u64
-    {
+    // Separate retained-history budget; 4,096 is a compaction trigger, not a lifetime cap.
+    if number(&rows(c, "SELECT count(*) FROM _day_sync_transactions", &[])?[0][0])? >= 65_536 {
         return Err(error("sync.retention_limit"));
-    }
-    let actors = rows(c, "SELECT DISTINCT actor FROM _day_sync_transactions", &[])?;
-    if actors.len() >= wire::MAX_ACTORS
-        && !actors
-            .iter()
-            .any(|r| r[0].as_text().ok() == Some(&tx.actor))
-    {
-        return Err(error("sync.actor_limit"));
     }
     c.execute(concat!(
 "INSERT INTO ",
 "_day_sync_transactions(actor,sequence,hash,bytes,lamport,local,applied,published) VALUES(?,?,?,?,?,?,?,0)"
 ),&[text(&tx.actor),int(tx.sequence),text(hash),Value::Blob(bytes.to_vec()),int(tx.lamport),Value::Int(local as i64),Value::Int(local as i64)])?;
-    c.execute(
-        "INSERT INTO _day_sync_revisions(actor,sequence,requires,revision) VALUES(?,?,?,?)",
-        &[
-            text(&tx.actor),
-            int(tx.sequence),
-            int(tx.requires.into()),
-            int(tx.revision.into()),
-        ],
-    )?;
-
     Ok(())
 }
 /// The record revision this build reads: its application's, or 1 for plain bookmarks.
@@ -371,12 +352,7 @@ pub(crate) fn merge(
     for change in &tx.changes {
         for (actor, seen) in &tx.context {
             c.execute(
-                concat!(
-                    "DELETE FROM _day_sync_candidates WHERE object=? AND actor=? AND sequence<=? ",
-                    "AND coalesce((SELECT r.requires FROM _day_sync_revisions r WHERE ",
-                    "r.actor=_day_sync_candidates.actor AND ",
-                    "r.sequence=_day_sync_candidates.sequence),1)<=?"
-                ),
+                "DELETE FROM _day_sync_candidates WHERE object=? AND actor=? AND sequence<=? AND requires<=?",
                 &[
                     text(&change.id),
                     text(actor),
@@ -398,24 +374,43 @@ pub(crate) fn merge(
         c.execute(
             concat!(
                 "INSERT INTO ",
-                "_day_sync_candidates(object,actor,sequence,value) ",
-                "VALUES(?,?,?,?)"
+                "_day_sync_candidates(object,actor,sequence,value,lamport,requires,revision) ",
+                "VALUES(?,?,?,?,?,?,?)"
             ),
-            &[text(&change.id), text(&tx.actor), int(tx.sequence), value],
+            &[
+                text(&change.id),
+                text(&tx.actor),
+                int(tx.sequence),
+                value,
+                int(tx.lamport),
+                int(tx.requires.into()),
+                int(tx.revision.into()),
+            ],
         )?;
         if project {
             project_object(c, &change.id, application)?;
         }
     }
+    let hash = rows(
+        c,
+        "SELECT hash FROM _day_sync_transactions WHERE actor=? AND sequence=?",
+        &[text(&tx.actor), int(tx.sequence)],
+    )?[0][0]
+        .clone();
     c.execute(
         concat!(
             concat!(
-                "INSERT INTO _day_sync_frontiers(actor,sequence) VALUES(?,?) ",
+                "INSERT INTO _day_sync_frontiers(actor,sequence,hash,lamport) VALUES(?,?,?,?) ",
                 "ON CONFLICT(actor) "
             ),
-            "DO UPDATE SET sequence=excluded.sequence"
+            "DO UPDATE SET sequence=excluded.sequence,hash=excluded.hash,lamport=excluded.lamport"
         ),
-        &[text(&tx.actor), int(tx.sequence)],
+        &[
+            text(&tx.actor),
+            int(tx.sequence),
+            hash.clone(),
+            int(tx.lamport),
+        ],
     )?;
     c.execute(
         concat!(
@@ -423,6 +418,10 @@ pub(crate) fn merge(
             "AND sequence=?"
         ),
         &[text(&tx.actor), int(tx.sequence)],
+    )?;
+    c.execute(
+        "UPDATE _day_sync_loaded SET applied=1 WHERE name=?",
+        &[text(tx.filename(hash.as_text()?))],
     )?;
     c.execute(
         "UPDATE _day_sync_config SET clock=max(clock,?) WHERE id=1",
@@ -441,14 +440,16 @@ pub(crate) fn project_object(
 ) -> Result<(), DbError> {
     let held = rows(
         c,
-        concat!(
-            "SELECT max(r.requires) FROM _day_sync_candidates c JOIN _day_sync_revisions r ",
-            "ON r.actor=c.actor AND r.sequence=c.sequence WHERE c.object=? AND r.requires>?"
-        ),
+        "SELECT max(requires) FROM _day_sync_candidates WHERE object=? AND requires>?",
         &[text(object), int(reader(application).into())],
     )?
     .pop()
     .filter(|r| r[0] != Value::Null);
+    let is_held = held.is_some();
+    let required = held
+        .as_ref()
+        .map(|r| number(&r[0]).map(|n| n as u32))
+        .transpose()?;
     if let Some(row) = held {
         c.execute(
             concat!(
@@ -462,19 +463,19 @@ pub(crate) fn project_object(
     }
     let candidates = rows(
         c,
-        concat!(
-            concat!(
-                "SELECT c.value FROM _day_sync_candidates c JOIN ",
-                "_day_sync_transactions t ON "
-            ),
-            "t.actor=c.actor AND t.sequence=c.sequence WHERE c.object=? AND ",
-            "coalesce((SELECT r.requires FROM _day_sync_revisions r WHERE r.actor=c.actor AND ",
-            "r.sequence=c.sequence),1)<=? ORDER BY c.value IS ",
-            "NULL DESC,t.lamport DESC,c.actor DESC,c.sequence DESC"
-        ),
+        "SELECT value FROM _day_sync_candidates WHERE object=? AND requires<=? ORDER BY value IS NULL DESC,lamport DESC,actor DESC,sequence DESC",
         &[text(object), int(reader(application).into())],
     )?;
     if candidates.is_empty() {
+        if !is_held {
+            c.execute("DELETE FROM sync_bookmarks WHERE id=?", &[text(object)])?;
+            if let Some(app) = application {
+                app.project(c, object, None)?;
+            }
+        }
+        if let Some(app) = application {
+            app.held(c, object, required)?;
+        }
         return Ok(());
     }
     let values = candidates
@@ -522,6 +523,7 @@ pub(crate) fn project_object(
     }
     if let Some(app) = application {
         app.project(c, object, values[index].as_ref())?;
+        app.held(c, object, required)?;
     }
     Ok(())
 }
@@ -567,35 +569,37 @@ pub(crate) fn ready(
     {
         return Ok(false);
     }
-    let mut clock = 0;
+    let head = rows(
+        c,
+        "SELECT hash FROM _day_sync_frontiers WHERE actor=?",
+        &[text(&tx.actor)],
+    )?;
+    if tx.previous.as_deref() != head.first().map(|r| r[0].as_text()).transpose()? {
+        return Err(error("sync.hash_chain_mismatch"));
+    }
+    let mut exact = 0;
+    let mut upper = 0;
+    let mut compacted = false;
     for (actor, seq) in &tx.context {
-        let row = rows(
-            c,
-            concat!(
-                "SELECT lamport,hash,bytes FROM _day_sync_transactions WHERE ",
-                "actor=? AND sequence=? AND applied=1"
-            ),
-            &[text(actor), int(*seq)],
-        )?
-        .pop()
-        .ok_or_else(|| error("sync.missing_dependency"))?;
-
-        clock = clock.max(number(&row[0])?);
-        let dependency = identity
-            .decode_record(row[2].as_blob()?)
-            .map_err(|_| error("sync.dependency_integrity"))?;
-        if dependency
-            .context
-            .iter()
-            .any(|(a, n)| tx.context.get(a).copied().unwrap_or(0) < *n)
-        {
-            return Err(error("sync.non_closed_context"));
-        }
-        if actor == &tx.actor && tx.previous.as_deref() != Some(row[1].as_text()?) {
-            return Err(error("sync.hash_chain_mismatch"));
+        if let Some(row) = rows(c,"SELECT lamport,bytes FROM _day_sync_transactions WHERE actor=? AND sequence=? AND applied=1",&[text(actor),int(*seq)])?.pop() {
+            let clock = number(&row[0])?;
+            exact = exact.max(clock);
+            upper = upper.max(clock);
+            let dependency = identity.decode_record(row[1].as_blob()?).map_err(|_| error("sync.dependency_integrity"))?;
+            if dependency.context.iter().any(|(a,n)| tx.context.get(a).copied().unwrap_or(0) < *n) {
+                return Err(error("sync.non_closed_context"));
+            }
+        } else {
+            let h = rows(c,"SELECT sequence,lamport FROM _day_sync_frontiers WHERE actor=?",&[text(actor)])?.pop().ok_or_else(|| error("sync.missing_dependency"))?;
+            let clock = number(&h[1])?;
+            upper = upper.max(clock);
+            if number(&h[0])? == *seq { exact = exact.max(clock); } else { compacted = true; }
         }
     }
-    if clock + 1 != tx.lamport {
+    if tx.lamport <= exact
+        || tx.lamport > upper.saturating_add(1)
+        || (!compacted && tx.lamport != exact.saturating_add(1))
+    {
         return Err(error("sync.invalid_lamport"));
     }
     Ok(true)
@@ -635,4 +639,15 @@ pub(crate) fn insert_member(
         &[text(member.actor), Value::Blob(bytes.to_vec())],
     )?;
     Ok(())
+}
+
+/// Exact history evidence retained either as a record or an individually applied input receipt.
+pub(crate) fn recorded_hash(
+    c: &mut dyn SqliteConnection,
+    actor: &str,
+    sequence: u64,
+) -> Result<Option<String>, DbError> {
+    rows(c, "SELECT hash FROM _day_sync_transactions WHERE actor=? AND sequence=? UNION ALL SELECT hash FROM _day_sync_loaded WHERE applied=1 AND name GLOB ? LIMIT 1",
+        &[text(actor), int(sequence), text(wire::record_name(actor, sequence, "*"))])?
+        .pop().map(|r| r[0].as_text().map(str::to_owned)).transpose()
 }
