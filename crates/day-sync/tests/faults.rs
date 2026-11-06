@@ -197,6 +197,14 @@ async fn open(d: &std::path::Path, n: &str, s: &Space) -> Replica {
         .await
         .unwrap()
 }
+/// The length of a long schedule. Every engine transaction reaches disk (`synchronous=FULL`),
+/// and GitHub's Windows runners flush several times slower than Linux: at full length the longer
+/// of the two schedules below ran eleven minutes there, a tenth of that on Linux, and pushed the
+/// workflow's thirty-minute test step over its limit. Windows keeps each schedule's shape and
+/// runs a quarter of its length.
+fn scaled(len: u64) -> u64 {
+    if cfg!(windows) { len / 4 } else { len }
+}
 #[test]
 fn failures_before_and_after_store_operations_preserve_recoverability() {
     block_on(async {
@@ -299,7 +307,7 @@ fn randomized_engine_schedules_match_an_uncompacted_replay() {
         let mut seed = 913u64;
         let mut history = vec![];
         // A reproducible long schedule; the separate pure-state suite generates 10,000 histories.
-        for step in 0..10_000 {
+        for step in 0..scaled(10_000) {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
             let r = &replicas[((seed >> 32) % 4) as usize];
             match seed % 5 {
@@ -430,7 +438,7 @@ fn known_snapshot_transport_failure_is_not_mistaken_for_corruption() {
 #[test]
 fn seeded_restart_and_transport_schedules_match_original_operation_replay() {
     block_on(async {
-        for initial in 0..32u64 {
+        for initial in 0..scaled(32) {
             let d = tempfile::tempdir().unwrap();
             let space = Identity::create_space().unwrap().space;
             let store = Faults::new();

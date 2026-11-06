@@ -275,7 +275,7 @@ From the repository root, run the example and checks:
 ```sh
 cargo run -p day-sync --example compaction
 cargo test --workspace
-cargo test --workspace --features day-sync-webdav/reqwest
+cargo test -p day-sync-webdav --features reqwest
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -286,6 +286,12 @@ uploads, process restarts, and cleanup verification. See the
 [recovery scenarios](../crates/day-sync/tests/recovery.rs),
 [fault schedules](../crates/day-sync/tests/faults.rs), and
 [WebDAV request tests](../crates/day-sync-webdav/tests/compaction.rs).
+
+The engine suite runs once with the default features. The additional `reqwest` pass targets
+only the WebDAV crate, since changing the HTTP provider does not change the engine. Windows
+runs 2,500 steps of the long randomized engine schedule and eight complete restart/transport
+schedules; other hosts run 10,000 steps and 32 schedules. The shorter Windows runs retain
+full durability and replay checks while reducing the risk of CI timeouts.
 
 The opt-in [measurement test](../crates/day-sync/tests/measurements.rs) reports synthetic storage
 costs; it does not measure production network performance:

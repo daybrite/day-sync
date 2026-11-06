@@ -4,7 +4,10 @@ name: ci
 
 # The shared Day library workflow (daybrite/actions' daylib.yml) reads what to check from this
 # repository's manifests: fmt, clippy and test of the three crates on Linux, macOS and Windows,
-# with and without the WebDAV crate's `reqwest` provider, and clippy for the mobile targets. There is no demo app, so the demo and
+# then the WebDAV crate again with its `reqwest` provider, and clippy for the mobile targets.
+# The second set names that one crate: the provider changes nothing in the engine, and a second
+# pass over the engine's suite (durable transactions, several times slower on the Windows
+# runner) overran the workflow's thirty-minute test step. There is no demo app, so the demo and
 # website legs are skipped, and the crate is `publish = false`, so nothing goes to crates.io.
 # A push builds against the head of day's main branch and of every other Day repository's
 # default branch; the nightly run builds against the newest releases.
@@ -36,5 +39,5 @@ jobs:
     secrets: inherit
     with:
       day-main: ${{ inputs.day-main || false }}
-      feature-sets: --features day-sync-webdav/reqwest
+      feature-sets: -p day-sync-webdav --features day-sync-webdav/reqwest
       publish: false
