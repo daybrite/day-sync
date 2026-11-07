@@ -5,7 +5,9 @@ use crate::{
     identity::Identity,
     wire::{self, Transaction},
 };
-use day_persistence::{DbError, SqliteConnection, TransactionParticipant, Value, WriteOrigin};
+use day_persistence::{
+    DbError, Refresh, RowChange, SqliteConnection, TransactionParticipant, Value, WriteOrigin,
+};
 use std::{collections::BTreeMap, fs::File, sync::Arc};
 
 pub(crate) fn error(s: &str) -> DbError {
@@ -65,7 +67,15 @@ pub(crate) fn frontier(c: &mut dyn SqliteConnection) -> Result<BTreeMap<String, 
 pub(crate) fn install(c: &mut dyn SqliteConnection, identity: &Identity) -> Result<(), DbError> {
     let space = identity.space();
     identity.validate().map_err(|_| error("sync.identity"))?;
+    // Both pragmas are per connection: every open re-applies them on the connection that
+    // writes the store. On Apple platforms a plain fsync does not flush the drive cache, so a
+    // commit that was published and then lost in a power cut would leave the server ahead of
+    // this writer. A full fsync on every commit costs about twenty times a plain one, so it
+    // is paid only at checkpoints, and a pass checkpoints once before it publishes anything.
     c.execute_batch("PRAGMA synchronous=FULL;")?;
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        c.execute_batch("PRAGMA checkpoint_fullfsync=ON;")?;
+    }
     c.begin()?;
     let result = (|| {
         // This is crate-owned protocol DDL, not an application resource.
@@ -128,9 +138,6 @@ pub(crate) struct Journal {
     pub _lease: File,
 }
 impl TransactionParticipant for Journal {
-    fn refresh_after_commit(&self, origin: WriteOrigin) -> bool {
-        self.application.is_some() && origin == WriteOrigin::Local
-    }
     fn begin(&self, c: &mut dyn SqliteConnection, origin: WriteOrigin) -> Result<(), DbError> {
         if origin == WriteOrigin::Local
             && !rows(c, "SELECT id FROM _day_sync_fence", &[])?.is_empty()
@@ -159,10 +166,11 @@ impl TransactionParticipant for Journal {
         &self,
         c: &mut dyn SqliteConnection,
         origin: WriteOrigin,
-    ) -> Result<(), DbError> {
+        changes: &[RowChange],
+    ) -> Result<Refresh, DbError> {
         if origin == WriteOrigin::Local {
             if let Some(app) = &self.application {
-                for change in app.capture(c)? {
+                for change in app.capture(c, changes)? {
                     app.validate(&change)?;
                     if let Some(v) = change.value {
                         c.execute(
@@ -315,7 +323,17 @@ impl TransactionParticipant for Journal {
         }
         c.execute("DELETE FROM _day_sync_dirty", &[])?;
         c.execute("UPDATE _day_sync_guard SET mode=0 WHERE id=1", &[])?;
-        Ok(())
+        // Capture projects retained remote state into the model inside this same local
+        // transaction (an arrival takes its archived choices), so resident rows of the
+        // adapter's tables are re-read after COMMIT. Imports refresh through the replica's
+        // own rescan.
+        Ok(match (&self.application, origin) {
+            (Some(app), WriteOrigin::Local) => match app.projected_tables() {
+                Some(tables) => Refresh::Tables(tables.to_vec()),
+                None => Refresh::All,
+            },
+            _ => Refresh::None,
+        })
     }
 }
 pub(crate) fn reserve(

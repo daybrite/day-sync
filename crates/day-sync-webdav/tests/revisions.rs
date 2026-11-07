@@ -4,7 +4,9 @@
 //! like Day-News's feed-state profile: revision 1 accepts exactly today's records, revision 2 adds
 //! an `archived` kind, and revision 3 lets a star carry a note.
 #![cfg(not(target_arch = "wasm32"))]
-use day_persistence::{DbError, ModelContainer, Sqlite, SqliteConnection, Value, schema};
+use day_persistence::{
+    DbError, ModelContainer, RowChange, Sqlite, SqliteConnection, Value, schema,
+};
 use day_sync::*;
 use day_sync_webdav::{WebDavStore, webdav::*};
 use futures_lite::future::block_on;
@@ -48,7 +50,11 @@ impl Application for News {
             "CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,kind TEXT NOT NULL,guid TEXT NOT NULL,value INTEGER NOT NULL,note TEXT); CREATE TABLE IF NOT EXISTS holds(id TEXT PRIMARY KEY,revision INTEGER NOT NULL)",
         )
     }
-    fn capture(&self, _: &mut dyn SqliteConnection) -> Result<Vec<Change>, DbError> {
+    fn capture(
+        &self,
+        _: &mut dyn SqliteConnection,
+        _: &[RowChange],
+    ) -> Result<Vec<Change>, DbError> {
         Ok(vec![])
     }
     fn validate(&self, change: &Change) -> Result<(), DbError> {

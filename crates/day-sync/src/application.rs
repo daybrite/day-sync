@@ -1,7 +1,7 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
 use crate::{BookmarkValue, Change};
-use day_persistence::{DbError, SqliteConnection};
+use day_persistence::{DbError, RowChange, SqliteConnection};
 
 /// Versioned application mapping over v5's bounded two-string record envelope. Applications
 /// MUST validate their namespace, canonical payload and identity before accepting a record.
@@ -12,7 +12,21 @@ use day_persistence::{DbError, SqliteConnection};
 pub trait Application: Send + Sync + 'static {
     fn profile(&self) -> &'static str;
     fn install(&self, connection: &mut dyn SqliteConnection) -> Result<(), DbError>;
-    fn capture(&self, connection: &mut dyn SqliteConnection) -> Result<Vec<Change>, DbError>;
+    /// Local intentions from the committing transaction. `changes` is the ORM's folded change
+    /// set for the transaction: every row it inserted, updated (with the changed columns),
+    /// deleted or rewrote, with the author tags of those edits. Rows removed by the engine's
+    /// own `ON DELETE` without being faulted are not in it; an adapter that must also capture
+    /// raw SQL keeps guard triggers for that path.
+    fn capture(
+        &self,
+        connection: &mut dyn SqliteConnection,
+        changes: &[RowChange],
+    ) -> Result<Vec<Change>, DbError>;
+    /// The model tables `project` and `capture` write by SQL, so only their resident rows are
+    /// re-read after a local commit. `None` re-reads every table.
+    fn projected_tables(&self) -> Option<&'static [&'static str]> {
+        None
+    }
     fn validate(&self, change: &Change) -> Result<(), DbError>;
     /// The highest record revision this build reads and writes. Raise it only when records gain
     /// a form an older build cannot read; every build must still read all lower revisions.

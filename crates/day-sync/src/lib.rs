@@ -954,6 +954,13 @@ impl Replica {
         }
         Ok(None)
     }
+    /// Force the journal through the drive cache before any of it leaves the device: a
+    /// checkpoint, with full fsync where the platform needs it. A record the store has seen
+    /// must survive a power cut here, or this writer's own history ends up ahead of it.
+    async fn durable_before_publish(&self) -> Result<(), Error> {
+        self.db.checkpoint().await?;
+        Ok(())
+    }
     // One exact persisted object at a time keeps reconciliation memory bounded.
     async fn reconcile_outbox(
         &self,
@@ -977,6 +984,9 @@ impl Replica {
                     }
                 }).collect::<Result<Vec<_>, _>>()
         })).await?;
+        if !hashes.is_empty() {
+            self.durable_before_publish().await?;
+        }
         for hash in hashes {
             if let Some(object) = self.objects(true, Some(hash)).await?.pop() {
                 self.upload(store, directory, object).await?;
@@ -1079,10 +1089,15 @@ impl Replica {
                 number(&rows(c, "SELECT count(*) FROM _day_sync_transactions WHERE local=1 AND published=0", &[])?[0][0])
             })).await? >= wire::COMPACT_AFTER;
         }
+        let mut flushed = false;
         while !report.uploads_deferred {
             let Some(object) = self.objects(true, None).await?.pop() else {
                 break;
             };
+            if !flushed {
+                self.durable_before_publish().await?;
+                flushed = true;
+            }
             self.upload(store, &directory, object).await?;
             report.uploaded += 1;
         }

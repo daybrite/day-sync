@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS _day_sync_handoff(id INTEGER PRIMARY KEY CHECK(id=1),
 CREATE TABLE IF NOT EXISTS _day_sync_bootstrap(id INTEGER PRIMARY KEY CHECK(id=1),hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS _day_sync_guard (id INTEGER PRIMARY KEY CHECK(id=1), mode INTEGER NOT NULL CHECK(mode IN (0,1,2)));
 INSERT OR IGNORE INTO _day_sync_guard VALUES(1,0);
-CREATE TABLE IF NOT EXISTS _day_sync_dirty (object TEXT NOT NULL PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS _day_sync_dirty (object TEXT NOT NULL PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS _day_sync_transactions (
  actor TEXT NOT NULL, sequence INTEGER NOT NULL CHECK(sequence>0), hash TEXT NOT NULL UNIQUE,
  bytes BLOB NOT NULL CHECK(length(bytes)<=264192), lamport INTEGER NOT NULL CHECK(lamport>0),
@@ -26,12 +26,12 @@ CREATE INDEX IF NOT EXISTS _day_sync_inbox ON _day_sync_transactions(lamport,act
 CREATE TABLE IF NOT EXISTS _day_sync_frontiers (
  actor TEXT NOT NULL PRIMARY KEY, sequence INTEGER NOT NULL CHECK(sequence>0),
  hash TEXT NOT NULL, lamport INTEGER NOT NULL CHECK(lamport>0)
-);
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS _day_sync_candidates (
  object TEXT NOT NULL, actor TEXT NOT NULL, sequence INTEGER NOT NULL,
  value BLOB, lamport INTEGER NOT NULL, requires INTEGER NOT NULL, revision INTEGER NOT NULL,
  PRIMARY KEY(object,actor,sequence)
-);
+) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS _day_sync_candidate_transaction ON _day_sync_candidates(actor,sequence);
 CREATE TRIGGER IF NOT EXISTS _day_sync_insert BEFORE INSERT ON sync_bookmarks BEGIN
  SELECT CASE WHEN coalesce((SELECT mode FROM _day_sync_guard WHERE id=1),0) NOT IN (1,2) THEN RAISE(ABORT,'sync requires instrumented transaction') END;
@@ -60,22 +60,22 @@ CREATE TABLE IF NOT EXISTS _day_sync_forks (
 );
 
 CREATE TABLE IF NOT EXISTS _day_sync_space(id INTEGER PRIMARY KEY CHECK(id=1), descriptor BLOB NOT NULL CHECK(length(descriptor)<=2048));
-CREATE TABLE IF NOT EXISTS _day_sync_members(actor TEXT PRIMARY KEY, bytes BLOB NOT NULL CHECK(length(bytes)<=4096), published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1)));
+CREATE TABLE IF NOT EXISTS _day_sync_members(actor TEXT PRIMARY KEY, bytes BLOB NOT NULL CHECK(length(bytes)<=4096), published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1))) WITHOUT ROWID;
 -- Record revisions. A transaction requiring a newer application revision than this build reads
 -- is stored and ordered like any other, but its values are not projected: each object it touches
 -- stays held, at its last readable value, until a build that reads it opens the store.
-CREATE TABLE IF NOT EXISTS _day_sync_held (object TEXT NOT NULL PRIMARY KEY, requires INTEGER NOT NULL CHECK(requires>1));
+CREATE TABLE IF NOT EXISTS _day_sync_held (object TEXT NOT NULL PRIMARY KEY, requires INTEGER NOT NULL CHECK(requires>1)) WITHOUT ROWID;
 
 -- Durable snapshot publication and exact object provenance. No inferred sequence ranges.
-CREATE TABLE IF NOT EXISTS _day_sync_loaded(name TEXT PRIMARY KEY,hash TEXT NOT NULL,applied INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS _day_sync_snapshots(name TEXT PRIMARY KEY,manifest BLOB NOT NULL,loaded INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS _day_sync_loaded(name TEXT PRIMARY KEY,hash TEXT NOT NULL,applied INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS _day_sync_snapshots(name TEXT PRIMARY KEY,manifest BLOB NOT NULL,loaded INTEGER NOT NULL DEFAULT 1) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS _day_sync_compaction(id INTEGER PRIMARY KEY CHECK(id=1),body BLOB NOT NULL,inputs BLOB NOT NULL,verified INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS _day_sync_listing(name TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS _day_sync_listing(name TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS _day_sync_genesis(id INTEGER PRIMARY KEY CHECK(id=1),marker TEXT NOT NULL,body BLOB NOT NULL,published INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS _day_sync_listing_fence(id INTEGER PRIMARY KEY CHECK(id=1),token TEXT NOT NULL);
 
 -- Local-only maintenance receipts. Separate tables also upgrade earlier experimental v5 DBs.
-CREATE TABLE IF NOT EXISTS _day_sync_snapshot_checks(name TEXT PRIMARY KEY,pass INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS _day_sync_snapshot_checks(name TEXT PRIMARY KEY,pass INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS _day_sync_maintenance(id INTEGER PRIMARY KEY CHECK(id=1),pass INTEGER NOT NULL);
 INSERT OR IGNORE INTO _day_sync_maintenance VALUES(1,0);
 CREATE TABLE IF NOT EXISTS _day_sync_compaction_progress(id INTEGER PRIMARY KEY CHECK(id=1),next_input INTEGER NOT NULL);

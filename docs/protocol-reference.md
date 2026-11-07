@@ -45,7 +45,8 @@ A missing value represents deletion. This is an explicit mapping, not arbitrary-
 | --- | --- |
 | `profile` | Identifies the application format; it must match the space and stored database profile. |
 | `install` | Installs the adapter's schema and capture mechanism. |
-| `capture` | Returns local intentions inside the committing model transaction. |
+| `capture` | Returns local intentions inside the committing model transaction. It receives the ORM's folded change set for that transaction: each inserted, updated (with its changed columns), deleted or rewritten row, with the author tags of those edits. Rows the engine's own `ON DELETE` removed without being faulted are not in it. |
+| `projected_tables` | Names the model tables `capture` and `project` write by SQL, so only their resident rows are re-read after a local commit; the default re-reads every table. |
 | `validate` | Checks incoming readable payloads, including namespace, identity, and canonical application encoding. |
 | `resolve` | Selects a candidate index deterministically; it must be pure. |
 | `project` | Writes the chosen value into the application model inside the import transaction. |
