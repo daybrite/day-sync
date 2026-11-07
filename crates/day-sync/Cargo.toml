@@ -9,7 +9,7 @@ license.workspace = true
 publish.workspace = true
 
 [package.metadata.day]
-compat = "0.6"
+compat = "0.*"
 
 # The engine sits on rusqlite, so the crate is empty on the web target (`lib.rs` is
 # `#![cfg(not(target_arch = "wasm32"))]`) and takes nothing with it there.
