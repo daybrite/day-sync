@@ -22,7 +22,8 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "30 6 * * *"
+    - cron: "0 23 * * *" # 23:00 Eastern; staggered across daybrite.
+      timezone: America/New_York
 
 permissions:
   contents: read
