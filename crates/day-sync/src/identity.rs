@@ -13,6 +13,10 @@ pub struct Space {
     pub profile: String,
 }
 impl Space {
+    /// A new space for `profile`.
+    ///
+    /// # Errors
+    /// Returns an error when the new descriptor does not validate.
     pub fn new(profile: &str) -> Result<Self, Error> {
         let s = Self {
             version: 5,
@@ -23,6 +27,11 @@ impl Space {
         s.validate()?;
         Ok(s)
     }
+    /// Check the fields this build relies on.
+    ///
+    /// # Errors
+    /// Returns an error when the format version or encoding is unsupported, or a field is
+    /// malformed.
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 5 || self.encoding != "plain-json-v1" {
             return Err(Error::UnsupportedFormat);
@@ -35,16 +44,28 @@ impl Space {
     pub fn space(&self) -> &str {
         &self.id
     }
+    /// The canonical encoding.
+    ///
+    /// # Errors
+    /// Returns an error when the value does not validate or cannot be encoded.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         self.validate()?;
         encode(self)
     }
+    /// Decode and validate.
+    ///
+    /// # Errors
+    /// Returns an error when the bytes are oversized, do not decode, or do not validate.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let s: Self = decode(bytes, 2048)?;
         s.validate()?;
         Ok(s)
     }
     /// Read a space's descriptor from `store`, refusing a retired space.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidWire` for a malformed `id`, or an error when the store read fails,
+    /// the space is retired, or the descriptor does not validate.
     pub async fn fetch(store: &dyn crate::Store, id: &str) -> Result<Self, Error> {
         if !wire::valid_id(id) {
             return Err(Error::InvalidWire);
@@ -72,12 +93,24 @@ pub struct Identity {
     pub actor: String,
 }
 impl Identity {
+    /// A new space for the bookmark profile, with a first identity in it.
+    ///
+    /// # Errors
+    /// Returns an error when the new space or identity does not validate.
     pub fn create_space() -> Result<Self, Error> {
         Self::create_space_for("day-sync:bookmark:5")
     }
+    /// A new space for `profile`, with a first identity in it.
+    ///
+    /// # Errors
+    /// Returns an error when the new space or identity does not validate.
     pub fn create_space_for(profile: &str) -> Result<Self, Error> {
         Self::join(Space::new(profile)?)
     }
+    /// A new identity in an existing space.
+    ///
+    /// # Errors
+    /// Returns an error when the space or the new identity does not validate.
     pub fn join(space: Space) -> Result<Self, Error> {
         let i = Self {
             space,
@@ -86,6 +119,11 @@ impl Identity {
         i.validate()?;
         Ok(i)
     }
+    /// Check the fields this build relies on.
+    ///
+    /// # Errors
+    /// Returns an error when the format version or encoding is unsupported, or a field is
+    /// malformed.
     pub fn validate(&self) -> Result<(), Error> {
         self.space.validate()?;
         if !wire::valid_id(&self.actor) {
@@ -99,10 +137,18 @@ impl Identity {
     pub fn actor(&self) -> &str {
         &self.actor
     }
+    /// The canonical encoding.
+    ///
+    /// # Errors
+    /// Returns an error when the value does not validate or cannot be encoded.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         self.validate()?;
         encode(self)
     }
+    /// Decode and validate.
+    ///
+    /// # Errors
+    /// Returns an error when the bytes are oversized, do not decode, or do not validate.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let i: Self = decode(bytes, 4096)?;
         i.validate()?;

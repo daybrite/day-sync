@@ -221,9 +221,18 @@ impl Drop for RunGuard {
 impl Replica {
     /// Open a v5 plaintext store. Persist public identity alongside the database. Older formats
     /// are rejected; an old encrypted space is never silently converted.
+    ///
+    /// # Errors
+    /// Returns an error when the identity does not validate, or the database cannot be opened or
+    /// prepared for it.
     pub async fn open(path: impl AsRef<Path>, identity: Arc<Identity>) -> Result<Self, Error> {
         Self::open_with_probe(path, identity, Arc::new(|_| Ok(()))).await
     }
+    /// [`Replica::open`], with a probe called at each checkpoint of the engine's work.
+    ///
+    /// # Errors
+    /// Returns an error when the identity does not validate, or the database cannot be opened or
+    /// prepared for it. A probe's error is returned as it is.
     pub async fn open_with_probe(
         path: impl AsRef<Path>,
         identity: Arc<Identity>,
@@ -236,6 +245,10 @@ impl Replica {
     }
     /// Open an application's database and install the journal before any writers can access it.
     /// The factory must register Bookmark (the current bounded projection) alongside its own models.
+    ///
+    /// # Errors
+    /// Returns an error when the identity does not validate, or the database cannot be opened or
+    /// prepared for it.
     pub async fn open_application(
         path: impl AsRef<Path>,
         identity: Arc<Identity>,
@@ -278,8 +291,7 @@ impl Replica {
                 let result = (|| {
                     let name = adapter
                         .as_ref()
-                        .map(|a| a.profile())
-                        .unwrap_or("day-sync:bookmark:5");
+                        .map_or("day-sync:bookmark:5", |a| a.profile());
                     if name != init_identity.space.profile {
                         return Err(error("sync.wrong_application_profile"));
                     }
@@ -341,6 +353,10 @@ impl Replica {
     }
     /// One local logical transaction, including explicit deletes of absent objects. An explicit
     /// choice of the current value also resolves other observed concurrent candidates.
+    ///
+    /// # Errors
+    /// Returns an error when a change is not valid or the batch is over a limit, or the transaction
+    /// fails.
     pub async fn commit(&self, mut changes: Vec<Change>) -> Result<(), Error> {
         // Local batches may contain many bounded wire records, all committed atomically.
         // Keep a separate admission bound; the journal still enforces per-record limits.
@@ -385,6 +401,10 @@ impl Replica {
         (self.probe)(Checkpoint::LocalCommitted)?;
         Ok(())
     }
+    /// The replica's current state.
+    ///
+    /// # Errors
+    /// Returns the database error when the read fails.
     pub async fn snapshot(&self) -> Result<Snapshot, Error> {
         Ok(self
             .db
@@ -457,6 +477,9 @@ impl Replica {
             .await?)
     }
     /// Export immutable locally authored objects for diagnostics / deterministic transport tests.
+    ///
+    /// # Errors
+    /// Returns the database error when the read fails.
     pub async fn local_objects(&self) -> Result<Vec<Object>, Error> {
         self.objects(false, None).await
     }
@@ -509,6 +532,10 @@ impl Replica {
     }
     /// Persist a complete verified object before applying anything. Returns false for an exact
     /// duplicate. A reused actor/sequence with different bytes permanently quarantines the store.
+    ///
+    /// # Errors
+    /// Returns `Error::Limit` for an oversized object, or an error when the object does not verify
+    /// or the database write fails.
     pub async fn receive(&self, object: Object) -> Result<bool, Error> {
         if object.bytes.len() > envelope::MAX_RECORD {
             return Err(Error::Limit);
@@ -624,6 +651,9 @@ impl Replica {
         Ok(result == 1)
     }
     /// Drain causally ready inbox entries; unresolved predecessors remain durably queued.
+    ///
+    /// # Errors
+    /// Returns the database error when an entry cannot be applied.
     pub async fn apply_ready(&self) -> Result<usize, Error> {
         let mut applied = 0;
         // An upgraded build first projects the objects an older build held for it. Read first:
@@ -864,12 +894,9 @@ impl Replica {
             if !name.starts_with("tx-") {
                 continue;
             }
-            let (actor, sequence, hash) = match wire::parse_filename(&name) {
-                Ok(dot) => dot,
-                Err(_) => {
-                    rejected += 1;
-                    continue;
-                }
+            let Ok((actor, sequence, hash)) = wire::parse_filename(&name) else {
+                rejected += 1;
+                continue;
             };
             // Exact validated names, including individually applied cleanup receipts, are
             // immutable. An alternative hash at the same dot still goes through receive().
@@ -1046,9 +1073,18 @@ impl Replica {
     /// Synchronize once against `store`. One active run per Replica family; cancellation
     /// releases admission. Database jobs already accepted continue atomically even if the
     /// caller drops this future.
+    ///
+    /// # Errors
+    /// Returns `Error::Busy` when another run is active, and otherwise the store or database error
+    /// that stopped the run.
     pub async fn sync(&self, store: &dyn Store) -> Result<SyncReport, Error> {
         self.sync_with_options(store, SyncOptions::default()).await
     }
+    /// [`Replica::sync`], with explicit options.
+    ///
+    /// # Errors
+    /// Returns `Error::Busy` when another run is active, and otherwise the store or database error
+    /// that stopped the run.
     pub async fn sync_with_options(
         &self,
         store: &dyn Store,
@@ -1144,6 +1180,10 @@ impl Replica {
         }
         Ok(report)
     }
+    /// Close the database.
+    ///
+    /// # Errors
+    /// Returns the database error when the close fails.
     pub async fn close(&self) -> Result<(), Error> {
         Ok(self.db.close().await?)
     }

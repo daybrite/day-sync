@@ -26,7 +26,7 @@ pub(crate) fn rows(
 ) -> Result<Vec<Vec<Value>>, DbError> {
     let mut out = vec![];
     c.query(sql, params, &mut |r| {
-        out.push((0..r.len()).map(|i| r.get(i)).collect())
+        out.push((0..r.len()).map(|i| r.get(i)).collect());
     })?;
     Ok(out)
 }
@@ -350,12 +350,12 @@ pub(crate) fn reserve(
     c.execute(concat!(
 "INSERT INTO ",
 "_day_sync_transactions(actor,sequence,hash,bytes,lamport,local,applied,published) VALUES(?,?,?,?,?,?,?,0)"
-),&[text(&tx.actor),int(tx.sequence),text(hash),Value::Blob(bytes.to_vec()),int(tx.lamport),Value::Int(local as i64),Value::Int(local as i64)])?;
+),&[text(&tx.actor),int(tx.sequence),text(hash),Value::Blob(bytes.to_vec()),int(tx.lamport),Value::Int(i64::from(local)),Value::Int(i64::from(local))])?;
     Ok(())
 }
 /// The record revision this build reads: its application's, or 1 for plain bookmarks.
 pub(crate) fn reader(application: Option<&dyn crate::Application>) -> u32 {
-    application.map_or(1, |app| app.revision())
+    application.map_or(1, super::application::Application::revision)
 }
 /// Apply a causally ready transaction. Preserve concurrent candidates; a concurrent deletion
 /// projects as deleted, otherwise the maximum (Lamport, actor, sequence) is deterministic.

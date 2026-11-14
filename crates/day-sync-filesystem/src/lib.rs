@@ -32,6 +32,9 @@ pub struct FilesystemStore {
 }
 impl FilesystemStore {
     /// Use `root` as the store, creating it if it does not exist.
+    ///
+    /// # Errors
+    /// Returns a `StoreError` when the directory cannot be created or resolved.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, StoreError> {
         fs::create_dir_all(root.as_ref()).map_err(convert)?;
         let root = root.as_ref().canonicalize().map_err(convert)?;

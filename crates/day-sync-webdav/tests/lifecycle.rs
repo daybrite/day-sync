@@ -14,6 +14,7 @@ use day_sync_webdav::{
     },
 };
 use futures_lite::future::block_on;
+use std::fmt::Write as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
@@ -40,7 +41,7 @@ fn server() -> (WebDavStore, Arc<Mutex<Store>>) {
    "PUT"=>{let PreparedBody::Bytes(b)=r.body else{panic!("bounded body")};s.files.insert(r.url.clone(),b.to_vec());Reply::new(201,vec![])},
    "DELETE"=>{s.delete_count+=1;Reply::new(if s.files.remove(&r.url).is_some(){204}else{404},vec![])},
    "GET"=>{if let Some(mut bytes)=s.files.get(&r.url).cloned(){if s.corrupt{s.corrupt=false;bytes.push(0);}Reply::new(200,bytes)}else{Reply::new(404,vec![])}},
-   "PROPFIND"=>{let mut xml=format!("<d:multistatus xmlns:d='DAV:'><d:response><d:href>{}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>",r.url);if !r.headers.iter().any(|(k,v)|k.eq_ignore_ascii_case("depth")&&v=="0"){for name in s.files.keys().filter(|p|p.starts_with(&r.url)){xml+=&format!("<d:response><d:href>{name}</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>");}}xml+="</d:multistatus>";Reply::new(207,xml.into_bytes())},
+   "PROPFIND"=>{let mut xml=format!("<d:multistatus xmlns:d='DAV:'><d:response><d:href>{}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>",r.url);if !r.headers.iter().any(|(k,v)|k.eq_ignore_ascii_case("depth")&&v=="0"){for name in s.files.keys().filter(|p|p.starts_with(&r.url)){let _=write!(xml,"<d:response><d:href>{name}</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>");}}xml+="</d:multistatus>";Reply::new(207,xml.into_bytes())},
    _=>panic!("unexpected request")
   };
   if fail==Some((n,true)){return Err(http::HttpError::Connect);}Ok(reply)
@@ -320,7 +321,10 @@ fn freeze_survives_restart_and_import_failure_rolls_back_every_record() {
         .unwrap();
         assert!(join.install_checkpoint(&package, &pin).await.is_err());
         assert_eq!(join.snapshot().await.unwrap().transactions, 0);
-        assert!(join.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            join.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         fail.store(false, Ordering::SeqCst);
         join.install_checkpoint(&package, &pin).await.unwrap();
         assert_eq!(join.snapshot().await.unwrap().bookmarks.len(), 600);

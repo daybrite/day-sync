@@ -162,7 +162,7 @@ impl State {
             for (cs, opposite, frontier) in [(left, right, other), (right, left, self)] {
                 for c in cs {
                     let found = opposite
-                        .binary_search_by_key(&c.key(), |v| v.key())
+                        .binary_search_by_key(&c.key(), Candidate::key)
                         .ok()
                         .map(|i| &opposite[i]);
                     if found.is_some_and(|old| old != c) {

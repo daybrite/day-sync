@@ -86,8 +86,7 @@ pub(crate) fn store_state(
                     .map(identity::encode)
                     .transpose()
                     .map_err(|_| error("sync.encode"))?
-                    .map(Value::Blob)
-                    .unwrap_or(Value::Null);
+                    .map_or(Value::Null, Value::Blob);
                 c.execute(
                     "INSERT INTO _day_sync_candidates VALUES(?,?,?,?,?,?,?)",
                     &[
@@ -309,11 +308,19 @@ impl Replica {
     }
     /// Publish and read back the complete state, then reclaim individually loaded inputs.
     /// The same admission guard as sync/freeze prevents deletion crossing a lifecycle barrier.
+    ///
+    /// # Errors
+    /// Returns `Error::Busy` when another run is active, and otherwise the store or database error
+    /// that stopped the run.
     pub async fn compact(&self, store: &dyn Store) -> Result<SyncReport, Error> {
         self.compact_with_options(store, SyncOptions::default())
             .await
     }
     /// Force a full audit and publish changed state, with bounded, resumable reclamation.
+    ///
+    /// # Errors
+    /// Returns `Error::Busy` when another run is active, and otherwise the store or database error
+    /// that stopped the run.
     pub async fn compact_with_options(
         &self,
         store: &dyn Store,

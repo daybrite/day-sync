@@ -26,3 +26,6 @@ futures-lite = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
 day-reactive = { workspace = true }
+
+[lints]
+workspace = true

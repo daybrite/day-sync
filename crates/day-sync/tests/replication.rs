@@ -58,8 +58,14 @@ fn two_databases_conflict_delete_and_explicit_resurrection_converge() {
             .unwrap();
         deliver(&a, &b).await;
         deliver(&b, &a).await;
-        assert!(a.snapshot().await.unwrap().bookmarks.is_empty());
-        assert!(b.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            a.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
+        assert_eq!(
+            b.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         assert_eq!(a.snapshot().await.unwrap().candidates.len(), 2);
         b.commit(vec![edit(&object, "explicit resurrection")])
             .await
@@ -93,7 +99,10 @@ fn out_of_order_duplicate_and_gap_survive_restart() {
         assert!(b.receive(objects[1].clone()).await.unwrap());
         assert_eq!(b.apply_ready().await.unwrap(), 0);
         assert_eq!(b.snapshot().await.unwrap().waiting, 1);
-        assert!(b.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            b.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         b.close().await.unwrap();
         drop(b);
         let b = open(&target, &space).await.unwrap();
@@ -135,8 +144,8 @@ fn local_journal_failure_rolls_back_model_and_sequence() {
         assert!(a.commit(vec![change.clone()]).await.is_err());
         let s = a.snapshot().await.unwrap();
         assert_eq!(s.transactions, 0);
-        assert!(s.bookmarks.is_empty());
-        assert!(s.candidates.is_empty());
+        assert_eq!(s.bookmarks, [] as [day_sync::Bookmark; 0]);
+        assert_eq!(s.candidates, [] as [day_sync::Candidate; 0]);
         fail.store(false, std::sync::atomic::Ordering::SeqCst);
         a.commit(vec![change]).await.unwrap();
         assert_eq!(a.snapshot().await.unwrap().frontier[a.actor()], 1);
@@ -172,13 +181,16 @@ fn failed_import_leaves_inbox_and_retries_without_echo() {
             .unwrap();
         assert!(b.apply_ready().await.is_err());
         let s = b.snapshot().await.unwrap();
-        assert!(s.bookmarks.is_empty());
+        assert_eq!(s.bookmarks, [] as [day_sync::Bookmark; 0]);
         assert!(s.frontier.is_empty());
         assert_eq!(s.waiting, 1);
         fail.store(false, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(b.apply_ready().await.unwrap(), 1);
         assert_eq!(b.snapshot().await.unwrap().pending_uploads, 0);
-        assert!(b.local_objects().await.unwrap().is_empty());
+        assert_eq!(
+            b.local_objects().await.unwrap(),
+            [] as [day_sync::Object; 0]
+        );
         a.close().await.unwrap();
         b.close().await.unwrap();
     });

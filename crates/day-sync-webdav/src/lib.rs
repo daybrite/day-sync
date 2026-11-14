@@ -1,6 +1,6 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
-//! A WebDAV folder as a [`day_sync::Store`].
+//! A `WebDAV` folder as a [`day_sync::Store`].
 //!
 //! Collections are the engine's directories, resources its objects. Create-only writes use
 //! `If-None-Match: *`; a complete `PROPFIND` at depth one is the listing, and a Multi-Status

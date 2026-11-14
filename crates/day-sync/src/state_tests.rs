@@ -1,6 +1,6 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
-//! Synthetic histories: this replay oracle never calls State::join.
+//! Synthetic histories: this replay oracle never calls `State::join`.
 use crate::{state::*, *};
 use std::collections::BTreeMap;
 #[derive(Clone)]
@@ -52,8 +52,8 @@ fn replay(space: &Space, events: &[Event], frontier: &BTreeMap<String, Head>) ->
 }
 fn random(seed: &mut u64, n: u64) -> u64 {
     *seed = seed
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
     (*seed >> 32) % n
 }
 #[test]

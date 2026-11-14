@@ -39,7 +39,7 @@ pub enum Created {
 /// as long as a partially written object is never visible under its final name.
 pub trait Store: Send + Sync {
     /// What this store stands for, pinned into the database on the first sync so a replica
-    /// never mixes two stores: a WebDAV endpoint URL, a directory's canonical path.
+    /// never mixes two stores: a `WebDAV` endpoint URL, a directory's canonical path.
     fn endpoint(&self) -> String;
     /// Make `directory` and its parents exist. An existing directory is success.
     fn ensure_directory<'a>(&'a self, directory: &'a [String]) -> StoreFuture<'a, ()>;
@@ -125,6 +125,7 @@ impl StoreError {
             source: Some(Box::new(source)),
         }
     }
+    #[must_use]
     pub fn retry_after(mut self, wait: Option<Duration>) -> Self {
         self.retry_after = wait;
         self

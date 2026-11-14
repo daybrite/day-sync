@@ -103,30 +103,29 @@ fn eleven_process_termination_boundaries_recover_without_partial_transactions() 
             let a = open(&path, &space).await.unwrap();
             let before = a.snapshot().await.unwrap();
             let rolled_back = matches!(point, Checkpoint::BeforeJournal | Checkpoint::AfterJournal);
-            assert_eq!(
-                before.transactions,
-                if rolled_back { 0 } else { 1 },
-                "{point:?}"
-            );
+            assert_eq!(before.transactions, u64::from(!rolled_back), "{point:?}");
             if matches!(
                 point,
                 Checkpoint::InboxStored | Checkpoint::BeforeApplyCommit
             ) {
                 assert_eq!(before.waiting, 1);
-                assert!(before.bookmarks.is_empty());
+                assert_eq!(before.bookmarks, [] as [day_sync::Bookmark; 0]);
                 assert!(before.frontier.is_empty());
             }
             a.sync(&client).await.unwrap();
             let after = a.snapshot().await.unwrap();
             assert_eq!(
                 after.bookmarks.len(),
-                if rolled_back { 0 } else { 1 },
+                usize::from(!rolled_back),
                 "{point:?}"
             );
             assert_eq!(after.pending_uploads, 0);
             assert_eq!(after.waiting, 0);
             if incoming {
-                assert!(a.local_objects().await.unwrap().is_empty());
+                assert_eq!(
+                    a.local_objects().await.unwrap(),
+                    [] as [day_sync::Object; 0]
+                );
             }
             a.close().await.unwrap();
             let db = rusqlite::Connection::open(&path).unwrap();

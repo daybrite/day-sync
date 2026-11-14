@@ -4,6 +4,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 use day_sync::*;
 use futures_lite::future::{block_on, poll_once, yield_now};
+use std::fmt::Write as _;
 use std::{
     collections::BTreeMap,
     sync::{
@@ -527,7 +528,7 @@ fn quota_with_snapshot_headroom_does_not_require_uploading_the_backlog() {
             b.sync(&s).await.unwrap();
             let state = b.snapshot().await.unwrap();
             if count == 0 {
-                assert!(state.bookmarks.is_empty());
+                assert_eq!(state.bookmarks, [] as [day_sync::Bookmark; 0]);
             } else {
                 assert_eq!(state.bookmarks[0].title, (count - 1).to_string());
             }
@@ -564,10 +565,13 @@ fn inconsistent_dominated_snapshot_is_rejected_atomically() {
         let at = body.find(",\"objects\":").unwrap();
         // Correct hashes, canonical encoding, same heads, but omit a still-live candidate.
         let wrong = format!("{},\"objects\":{{}}}}", &body[..at]);
-        let hash: String = Sha256::digest(wrong.as_bytes())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let hash: String =
+            Sha256::digest(wrong.as_bytes())
+                .iter()
+                .fold(String::new(), |mut out, b| {
+                    let _ = write!(out, "{b:02x}");
+                    out
+                });
         let old = name.trim_start_matches("snap-").trim_end_matches(".ds5");
         let manifest = String::from_utf8(mb.clone())
             .unwrap()

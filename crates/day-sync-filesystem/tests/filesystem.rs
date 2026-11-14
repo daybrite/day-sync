@@ -143,7 +143,10 @@ fn two_apps_synchronize_through_a_shared_folder() {
         .unwrap();
         a.commit(vec![edit(&id, "a once more")]).await.unwrap();
         converge(&replicas, &store).await;
-        assert!(a.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            a.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
 
         // A late joiner replays the whole folder.
         let c = Replica::open(

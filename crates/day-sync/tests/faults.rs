@@ -12,10 +12,13 @@ use std::{
     },
 };
 fn digest(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
     Sha256::digest(bytes)
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+        .fold(String::new(), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
 }
 #[derive(Clone)]
 struct Faults {
@@ -287,7 +290,10 @@ fn concurrent_compactors_with_different_views_and_resurrected_records_converge()
             a.snapshot().await.unwrap().candidates,
             c.snapshot().await.unwrap().candidates
         );
-        assert!(c.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            c.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         for r in [&a, &b, &c] {
             r.close().await.unwrap();
         }
@@ -308,7 +314,7 @@ fn randomized_engine_schedules_match_an_uncompacted_replay() {
         let mut history = vec![];
         // A reproducible long schedule; the separate pure-state suite generates 10,000 histories.
         for step in 0..scaled(10_000) {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
             let r = &replicas[((seed >> 32) % 4) as usize];
             match seed % 5 {
                 0 | 1 => {
@@ -460,8 +466,8 @@ fn seeded_restart_and_transport_schedules_match_original_operation_replay() {
             let mut history = Vec::new();
             for step in 0..128 {
                 seed = seed
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 let i = ((seed >> 32) % 3) as usize;
                 match seed % 6 {
                     0 | 1 => {

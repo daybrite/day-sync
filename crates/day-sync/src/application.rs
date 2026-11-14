@@ -11,12 +11,19 @@ use day_persistence::{DbError, RowChange, SqliteConnection};
 /// candidates ordered by the engine's deterministic default priority; it must be pure.
 pub trait Application: Send + Sync + 'static {
     fn profile(&self) -> &'static str;
+    /// Install what the application needs on `connection`.
+    ///
+    /// # Errors
+    /// Returns the database error when a statement fails.
     fn install(&self, connection: &mut dyn SqliteConnection) -> Result<(), DbError>;
     /// Local intentions from the committing transaction. `changes` is the ORM's folded change
     /// set for the transaction: every row it inserted, updated (with the changed columns),
     /// deleted or rewrote, with the author tags of those edits. Rows removed by the engine's
     /// own `ON DELETE` without being faulted are not in it; an adapter that must also capture
     /// raw SQL keeps guard triggers for that path.
+    ///
+    /// # Errors
+    /// Returns the database error when a statement fails.
     fn capture(
         &self,
         connection: &mut dyn SqliteConnection,
@@ -27,6 +34,10 @@ pub trait Application: Send + Sync + 'static {
     fn projected_tables(&self) -> Option<&'static [&'static str]> {
         None
     }
+    /// Check one change against the application's rules.
+    ///
+    /// # Errors
+    /// Returns an error when the change is not valid for this profile.
     fn validate(&self, change: &Change) -> Result<(), DbError>;
     /// The highest record revision this build reads and writes. Raise it only when records gain
     /// a form an older build cannot read; every build must still read all lower revisions.
@@ -38,11 +49,19 @@ pub trait Application: Send + Sync + 'static {
     fn requires(&self, _change: &Change) -> u32 {
         1
     }
+    /// The index of the winning candidate among causally concurrent values. The default takes the
+    /// first.
+    ///
+    /// # Errors
+    /// Returns an error when no candidate can be chosen.
     fn resolve(&self, _values: &[Option<BookmarkValue>]) -> Result<usize, DbError> {
         Ok(0)
     }
     /// Report unreadable surviving state after projection, or `None` when the hold clears.
     /// A retained display cache is local; a fresh replica need not have the same cache.
+    ///
+    /// # Errors
+    /// Returns the database error when the check fails.
     fn held(
         &self,
         _connection: &mut dyn SqliteConnection,
@@ -51,6 +70,10 @@ pub trait Application: Send + Sync + 'static {
     ) -> Result<(), DbError> {
         Ok(())
     }
+    /// Write one object's surviving value, or its absence, into the application's tables.
+    ///
+    /// # Errors
+    /// Returns the database error when a statement fails.
     fn project(
         &self,
         connection: &mut dyn SqliteConnection,

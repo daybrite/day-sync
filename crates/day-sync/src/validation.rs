@@ -17,7 +17,7 @@ fn format_boundary_rejects_unknown_protection_and_old_encrypted_format() {
         sequence: 1,
         lamport: 1,
         previous: None,
-        context: Default::default(),
+        context: std::collections::BTreeMap::default(),
         changes: vec![Change {
             id: uuid::Uuid::new_v4().to_string(),
             value: Some(BookmarkValue {

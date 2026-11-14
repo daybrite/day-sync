@@ -27,7 +27,7 @@ const PACKAGE_MAGIC: &[u8; 8] = b"DAYPKG05";
 fn write_field(w: &mut impl Write, bytes: &[u8]) -> Result<(), Error> {
     let n = u32::try_from(bytes.len()).map_err(|_| Error::Limit)?;
     w.write_all(&n.to_be_bytes())
-        .and_then(|_| w.write_all(bytes))
+        .and_then(|()| w.write_all(bytes))
         .map_err(|_| Error::InvalidWire)
 }
 fn read_number(r: &mut impl Read) -> Result<usize, Error> {
@@ -44,10 +44,10 @@ fn read_field(r: &mut impl Read, maximum: usize) -> Result<Vec<u8>, Error> {
     r.read_exact(&mut b).map_err(|_| Error::InvalidWire)?;
     Ok(b)
 }
-fn magic(r: &mut impl Read, expected: &[u8; 8]) -> Result<(), Error> {
+fn magic(r: &mut impl Read, expected: [u8; 8]) -> Result<(), Error> {
     let mut b = [0; 8];
     r.read_exact(&mut b).map_err(|_| Error::InvalidWire)?;
-    if &b != expected {
+    if b != expected {
         return Err(Error::InvalidWire);
     }
     Ok(())
@@ -226,6 +226,10 @@ fn verify_receipts(body: &Body) -> Result<(), Error> {
     Ok(())
 }
 impl Package {
+    /// The pin that names this package.
+    ///
+    /// # Errors
+    /// Returns an error when the manifest does not decode.
     pub fn pin(&self) -> Result<CheckpointPin, Error> {
         let m: Manifest = identity::decode(&self.manifest, MAX_MANIFEST)?;
         Ok(CheckpointPin {
@@ -234,6 +238,10 @@ impl Package {
             profile: m.body.cut.profile,
         })
     }
+    /// The space this package hands over to.
+    ///
+    /// # Errors
+    /// Returns an error when the package does not verify against `pin`.
     pub fn destination(&self, pin: &CheckpointPin) -> Result<Space, Error> {
         Ok(self.verify(pin)?.body.destination)
     }
@@ -246,6 +254,10 @@ impl Package {
     /// Stream a bounded, length-prefixed binary package to caller-owned staging storage.
     /// Contains public metadata and plaintext only. Use an atomic rename after successful
     /// completion; an I/O error may leave a partial destination. No JSON byte arrays.
+    ///
+    /// # Errors
+    /// Returns `Error::Limit` when the package is over a size bound, or an error when the writer
+    /// fails.
     pub fn write_to(&self, mut writer: impl Write) -> Result<(), Error> {
         if self.byte_count() > MAX_PACKAGE
             || self.manifest.len() > MAX_MANIFEST
@@ -271,8 +283,12 @@ impl Package {
     }
     /// Decode incrementally with per-field and cumulative allocation bounds, then validate
     /// against an independently held pin. The resulting package remains bounded in memory.
+    ///
+    /// # Errors
+    /// Returns an error when the bytes are not a package, exceed a bound, or do not verify against
+    /// `pin`.
     pub fn read_from(mut reader: impl Read, pin: &CheckpointPin) -> Result<Self, Error> {
-        magic(&mut reader, PACKAGE_MAGIC)?;
+        magic(&mut reader, *PACKAGE_MAGIC)?;
         let manifest = read_field(&mut reader, MAX_MANIFEST)?;
         let count = read_number(&mut reader)?;
         if count > 64 {
@@ -295,11 +311,20 @@ impl Package {
         package.verify(pin)?;
         Ok(package)
     }
+    /// The package as one byte vector ([`Package::write_to`] into memory).
+    ///
+    /// # Errors
+    /// Returns `Error::Limit` when the package is over a size bound.
     pub fn export(&self) -> Result<Vec<u8>, Error> {
         let mut bytes = Vec::new();
         self.write_to(&mut bytes)?;
         Ok(bytes)
     }
+    /// [`Package::read_from`] over a byte slice.
+    ///
+    /// # Errors
+    /// Returns `Error::Limit` for oversized input, or an error when the bytes are not a package
+    /// that verifies against `pin`.
     pub fn from_bytes(bytes: &[u8], pin: &CheckpointPin) -> Result<Self, Error> {
         if bytes.len() > MAX_PACKAGE_ENCODING {
             return Err(Error::Limit);
@@ -362,6 +387,10 @@ impl Package {
     }
     /// Objects first, immutable checksummed manifest LAST. Interrupted publication is retryable.
     /// A successful return is a verified publication, not protection against later store loss.
+    ///
+    /// # Errors
+    /// Returns an error when the package does not verify against `pin`, or a store write or its
+    /// read-back fails.
     pub async fn publish(&self, store: &dyn Store, pin: &CheckpointPin) -> Result<(), Error> {
         let base = self.base(pin)?;
         // Bootstrap receivers immediately treat the baseline as observed remote history.
@@ -406,6 +435,11 @@ impl Package {
         store.ensure_directory(&old).await?;
         put_verified(store, &old, "retired.json", &identity::encode(pin)?).await
     }
+    /// Fetch the package `pin` names from `store` and verify it.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidWire` for a malformed pin, or an error when a store read fails or the
+    /// fetched bytes do not verify against `pin`.
     pub async fn fetch(store: &dyn Store, pin: &CheckpointPin) -> Result<Self, Error> {
         if !wire::valid_hash(&pin.hash) || !wire::valid_id(pin.source.space()) {
             return Err(Error::InvalidWire);
@@ -516,6 +550,10 @@ impl Package {
 impl Replica {
     /// Irreversible local fence, durable before returning. Drain old uploads and exchange all
     /// remaining records AFTER freezing, then collect matching receipts. No timeout thaw.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidWire` for a malformed token, or an error when the fence cannot be
+    /// recorded.
     pub async fn freeze(&self, token: &str) -> Result<(), Error> {
         if !wire::valid_id(token) {
             return Err(Error::InvalidWire);
@@ -549,6 +587,10 @@ impl Replica {
             .await?;
         Ok(())
     }
+    /// This replica's receipt: its actor and the cut it has reached.
+    ///
+    /// # Errors
+    /// Returns the database error when the read fails.
     pub async fn attest(&self) -> Result<Receipt, Error> {
         let cut = self
             .db
@@ -559,6 +601,10 @@ impl Replica {
     }
     /// A caller coordinates a terminal handoff. `retired` is an explicit exclusion list,
     /// never inferred from timeouts. Persist the target's NEW identity first.
+    ///
+    /// # Errors
+    /// Returns an error when the handoff's preconditions do not hold, or a database read or write
+    /// fails.
     pub async fn prepare_checkpoint(
         &self,
         target: &Replica,
@@ -682,6 +728,10 @@ impl Replica {
     }
     /// Verify the entire bounded package before atomically importing into an EMPTY staging DB.
     /// Retrying the same pin preserves subsequent edits; a different pin is refused.
+    ///
+    /// # Errors
+    /// Returns an error when the package does not verify, the staging database already holds other
+    /// state, or the import fails.
     pub async fn install_checkpoint(
         &self,
         package: &Package,
@@ -766,6 +816,10 @@ impl Replica {
     /// Deletes ONLY old transaction paths checksummed into this terminal handoff, and only after
     /// fetching/verifying every checkpoint byte. Interrupted DELETEs are idempotent. This
     /// cannot make a malicious server retain the checkpoint after verification.
+    ///
+    /// # Errors
+    /// Returns an error when the checkpoint cannot be fetched and verified, or a store request
+    /// fails.
     pub async fn collect_history(
         &self,
         store: &dyn Store,
@@ -849,6 +903,10 @@ pub struct VerifiedBackup {
     checkpoint_hash: String,
 }
 impl Package {
+    /// Verify a backup's bytes against `pin`.
+    ///
+    /// # Errors
+    /// Returns an error when the bytes are not a package that verifies against `pin`.
     pub fn verify_backup(bytes: &[u8], pin: &CheckpointPin) -> Result<VerifiedBackup, Error> {
         let package = Self::from_bytes(bytes, pin)?;
         let id = Identity::join(package.destination(pin)?)?;
@@ -859,19 +917,23 @@ impl Package {
     }
     /// Explicitly accepts loss after this checkpoint; creates a NEW space and writer identity.
     /// The caller must persist the returned public identity before seeding a staging database.
-    pub fn recover(
-        &self,
-        pin: &CheckpointPin,
-        _policy: RecoveryPolicy,
-    ) -> Result<Recovered, Error> {
+    ///
+    /// # Errors
+    /// Returns an error when the backup does not verify against `pin`, or the new identity cannot
+    /// be created.
+    pub fn recover(&self, pin: &CheckpointPin, policy: RecoveryPolicy) -> Result<Recovered, Error> {
         let space = self.destination(pin)?;
         self.recover_to(
             pin,
-            _policy,
+            policy,
             Arc::new(Identity::create_space_for(&space.profile)?),
         )
     }
     /// Resume recovery with the same persisted public identity after interruption.
+    ///
+    /// # Errors
+    /// Returns `Error::WrongSpace` when `identity` has another profile or is in the source or
+    /// destination space, or an error when the backup does not verify against `pin`.
     pub fn recover_to(
         &self,
         pin: &CheckpointPin,
@@ -913,6 +975,11 @@ pub struct Recovered {
     changes: Vec<Change>,
 }
 impl Recovered {
+    /// Import the recovered state into a staging replica opened with the recovered identity.
+    ///
+    /// # Errors
+    /// Returns `Error::WrongSpace` when `replica` was opened with another identity, or the error of
+    /// the import.
     pub async fn seed(&self, replica: &Replica) -> Result<(), Error> {
         if *replica.identity != *self.identity {
             return Err(Error::WrongSpace);

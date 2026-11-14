@@ -61,7 +61,10 @@ fn lifecycle(url: &str, provider: http::Provider, auth: bool) {
         .unwrap();
         a.sync(&client).await.unwrap();
         b.sync(&client).await.unwrap();
-        assert!(b.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            b.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         b.commit(vec![edit(&object, "explicit resurrection")])
             .await
             .unwrap();

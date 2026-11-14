@@ -21,6 +21,10 @@ impl Replica {
             .read(|db| db.try_with_connection(storage::members))
             .await?)
     }
+    /// The space's member records, as objects to publish.
+    ///
+    /// # Errors
+    /// Returns the database error when the read fails.
     pub async fn member_objects(&self) -> Result<Vec<Object>, Error> {
         self.member_bytes()
             .await?
@@ -34,6 +38,11 @@ impl Replica {
             })
             .collect()
     }
+    /// Record a member another device published.
+    ///
+    /// # Errors
+    /// Returns an error when the object is not a valid member record of this space, or the database
+    /// write fails.
     pub async fn receive_member(&self, object: Object) -> Result<(), Error> {
         let m = Identity::from_bytes(&object.bytes)?;
         if member_name(&object.filename)? != m.actor || m.space != self.identity.space {
@@ -64,24 +73,21 @@ impl Replica {
             return Err(Error::Retired);
         }
         let expected = self.identity.space.to_bytes()?;
-        match store.get(directory, "space.json").await? {
-            Some(bytes) => {
-                if Space::from_bytes(&bytes)? != self.identity.space {
-                    return Err(Error::WrongSpace);
-                }
+        if let Some(bytes) = store.get(directory, "space.json").await? {
+            if Space::from_bytes(&bytes)? != self.identity.space {
+                return Err(Error::WrongSpace);
             }
-            None => {
-                // Create-only, so two founders racing for an empty space settle on one
-                // descriptor; the read back decides, not the write's outcome.
-                let result = store
-                    .create(directory, "space.json", expected.clone())
-                    .await;
-                match store.get(directory, "space.json").await? {
-                    Some(bytes) if bytes == expected => {}
-                    _ => {
-                        result?;
-                        return Err(Error::Integrity);
-                    }
+        } else {
+            // Create-only, so two founders racing for an empty space settle on one
+            // descriptor; the read back decides, not the write's outcome.
+            let result = store
+                .create(directory, "space.json", expected.clone())
+                .await;
+            match store.get(directory, "space.json").await? {
+                Some(bytes) if bytes == expected => {}
+                _ => {
+                    result?;
+                    return Err(Error::Integrity);
                 }
             }
         }

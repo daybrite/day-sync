@@ -1,6 +1,6 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
-//! Devices at three application revisions share one space over WebDAV. The application is shaped
+//! Devices at three application revisions share one space over `WebDAV`. The application is shaped
 //! like Day-News's feed-state profile: revision 1 accepts exactly today's records, revision 2 adds
 //! an `archived` kind, and revision 3 lets a star carry a note.
 #![cfg(not(target_arch = "wasm32"))]
@@ -12,6 +12,7 @@ use day_sync_webdav::{WebDavStore, webdav::*};
 use futures_lite::future::block_on;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::{path::Path, sync::Arc};
 
 const PROFILE: &str = "day-sync-test:feed-state:1";
@@ -82,7 +83,7 @@ impl Application for News {
         self.0
     }
     fn requires(&self, change: &Change) -> u32 {
-        state(change).map(|m| needed(&m)).unwrap_or(1)
+        state(change).map_or(1, |m| needed(&m))
     }
     fn resolve(&self, values: &[Option<BookmarkValue>]) -> Result<usize, DbError> {
         // Day-News's rule: concurrent choices prefer unread, starred and unsubscribed.
@@ -126,7 +127,7 @@ impl Application for News {
                 Value::Text(id.into()),
                 Value::Text(m["kind"].as_str().unwrap_or_default().into()),
                 Value::Text(m["guid"].as_str().unwrap_or_default().into()),
-                Value::Int((m["value"].as_bool() == Some(true)) as i64),
+                Value::Int(i64::from(m["value"].as_bool() == Some(true))),
                 m.get("note")
                     .and_then(Json::as_str)
                     .map_or(Value::Null, |n| Value::Text(n.into())),
@@ -144,8 +145,10 @@ fn choice(kind: &str, guid: &str, value: bool, note: Option<&str>) -> Change {
         // Day-News's identity: one object per (kind, feed, guid), whatever its fields.
         id: Sha256::digest(serde_json::to_vec(&(PROFILE, kind, FEED, guid)).unwrap())
             .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
+            .fold(String::new(), |mut out, b| {
+                let _ = write!(out, "{b:02x}");
+                out
+            }),
         value: Some(BookmarkValue {
             url: PROFILE.into(),
             title: m.to_string(),
@@ -178,7 +181,7 @@ async fn items(r: &Replica) -> Vec<(String, String, bool, Option<String>)> {
                             row.get(1).as_text().unwrap_or_default().to_owned(),
                             row.get(2) == Value::Int(1),
                             row.get(3).as_text().ok().map(str::to_owned),
-                        ))
+                        ));
                     },
                 )?;
                 Ok(out)
@@ -223,6 +226,10 @@ async fn object(client: &Client, folder: &str, prefix: &str) -> String {
     .unwrap()
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "each test builds the store for this call and hands it over"
+)]
 fn scenario(client: WebDavStore) {
     block_on(async {
         let dir = tempfile::tempdir().unwrap();
@@ -447,6 +454,10 @@ fn mixed_revisions_external() {
 }
 
 #[test]
+#[expect(
+    clippy::items_after_statements,
+    reason = "the helper sits beside the only steps that use it"
+)]
 fn held_objects_agree_at_one_revision_whatever_the_arrival_order() {
     block_on(async {
         let dir = tempfile::tempdir().unwrap();
@@ -536,7 +547,15 @@ fn snapshot_bootstrap_distinguishes_held_state_from_a_local_display_cache() {
         let fresh = device(&path, &fresh_id, 1).await;
         fresh.sync(&store).await.unwrap();
         assert_eq!(items(&b).await, cached);
-        assert!(items(&fresh).await.is_empty());
+        assert_eq!(
+            items(&fresh).await,
+            [] as [(
+                std::string::String,
+                std::string::String,
+                bool,
+                std::option::Option<std::string::String>
+            ); 0]
+        );
         for r in [&b, &fresh] {
             assert_eq!(r.snapshot().await.unwrap().held, 1);
             let held = r
@@ -564,7 +583,7 @@ fn snapshot_bootstrap_distinguishes_held_state_from_a_local_display_cache() {
             .read(|db| {
                 db.try_with_connection(|c| {
                     c.query("SELECT count(*) FROM holds", &[], &mut |row| {
-                        assert_eq!(row.get(0), Value::Int(0))
+                        assert_eq!(row.get(0), Value::Int(0));
                     })
                 })
             })

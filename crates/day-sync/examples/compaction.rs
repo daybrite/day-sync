@@ -45,7 +45,7 @@ fn main() {
         a.sync(&store).await.unwrap();
         let state = a.snapshot().await.unwrap();
         assert_eq!(state.candidates.len(), 2); // both concurrent intentions survive
-        assert!(state.bookmarks.is_empty()); // default resolver gives concurrent deletion priority
+        assert_eq!(state.bookmarks, [] as [day_sync::Bookmark; 0]); // default resolver gives concurrent deletion priority
 
         let first = a
             .compact_with_options(

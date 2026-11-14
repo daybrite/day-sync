@@ -59,7 +59,10 @@ fn snapshot_only_bootstrap_offline_backlog_and_repeated_compaction() {
         b.sync(&store).await.unwrap();
         a.sync(&store).await.unwrap();
         assert_eq!(a.snapshot().await.unwrap().candidates.len(), 2);
-        assert!(a.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            a.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         b.compact(&store).await.unwrap();
         let c = open(d.path(), "c", &space).await;
         c.sync(&store).await.unwrap();
@@ -431,11 +434,17 @@ fn oversized_state_keeps_outbox_and_can_compact_after_values_shrink() {
         .await
         .unwrap();
         a.compact(&store).await.unwrap();
-        assert!(a.local_objects().await.unwrap().is_empty());
+        assert_eq!(
+            a.local_objects().await.unwrap(),
+            [] as [day_sync::Object; 0]
+        );
         let b = open(d.path(), "b", &space).await;
         b.sync(&store).await.unwrap();
         assert_eq!(b.snapshot().await.unwrap().candidates.len(), 4100);
-        assert!(b.snapshot().await.unwrap().bookmarks.is_empty());
+        assert_eq!(
+            b.snapshot().await.unwrap().bookmarks,
+            [] as [day_sync::Bookmark; 0]
+        );
         a.close().await.unwrap();
         b.close().await.unwrap();
     });

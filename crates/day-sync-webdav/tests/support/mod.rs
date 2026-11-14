@@ -27,6 +27,11 @@ impl Fixture {
             _dir: dir,
         }
     }
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "tests await every fixture call alike"
+    )]
     pub async fn credentials(&self, path: impl AsRef<Path>) -> Arc<Identity> {
         let existing = self.identities.lock().unwrap().get(path.as_ref()).cloned();
         if let Some(c) = existing {

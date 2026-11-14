@@ -14,6 +14,7 @@ use day_sync_webdav::{
     },
 };
 use futures_lite::future::block_on;
+use std::fmt::Write as _;
 mod support;
 use std::{
     collections::BTreeMap,
@@ -76,8 +77,8 @@ fn setup() -> (WebDavStore, Arc<Mutex<Store>>, Simulation) {
             "PROPFIND"=>{
                 let zero=request.headers.iter().any(|(k,v)|k.eq_ignore_ascii_case("depth")&&v=="0");
                 let mut xml=String::from("<d:multistatus xmlns:d='DAV:'>");
-                if !matches!(s.fault,Fault::IncompleteListing){xml+=&format!("<d:response><d:href>{path}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>");}
-                if !zero{for name in s.files.keys().filter(|p|p.starts_with(&path)){xml+=&format!("<d:response><d:href>{name}</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>");}}
+                if !matches!(s.fault,Fault::IncompleteListing){let _=write!(xml,"<d:response><d:href>{path}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>");}
+                if !zero{for name in s.files.keys().filter(|p|p.starts_with(&path)){let _=write!(xml,"<d:response><d:href>{name}</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>");}}
                 xml+="</d:multistatus>";Ok(Reply::new(207,xml.into_bytes()))
             },_=>panic!("unexpected method")
         }
@@ -247,7 +248,7 @@ fn cancelling_in_flight_sync_releases_admission_without_losing_intent() {
         assert!(matches!(a.sync(&client).await, Err(day_sync::Error::Busy)));
         drop(future);
         assert_eq!(a.snapshot().await.unwrap().pending_uploads, 1);
-        sim.set_conditions(Default::default());
+        sim.set_conditions(http::simulation::Conditions::default());
         a.sync(&client).await.unwrap();
         assert_eq!(a.snapshot().await.unwrap().pending_uploads, 0);
         a.close().await.unwrap();

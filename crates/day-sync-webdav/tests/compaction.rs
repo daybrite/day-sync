@@ -1,6 +1,6 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
-//! Compaction over WebDAV: every request of a compacting pass can fail, before or after the
+//! Compaction over `WebDAV`: every request of a compacting pass can fail, before or after the
 //! server acts on it. Also exercise repair after replacement corruption and process reopening.
 #![cfg(not(target_arch = "wasm32"))]
 use day_sync::*;
@@ -16,6 +16,7 @@ use day_sync_webdav::{
     },
 };
 use futures_lite::future::block_on;
+use std::fmt::Write as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
@@ -86,7 +87,8 @@ fn server() -> (WebDavStore, Arc<Mutex<Server>>) {
                     .any(|(k, v)| k.eq_ignore_ascii_case("depth") && v == "0")
                 {
                     for name in s.files.keys().filter(|p| p.starts_with(&r.url)) {
-                        xml += &format!(
+                        let _ = write!(
+                            xml,
                             "<d:response><d:href>{name}</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
                         );
                     }

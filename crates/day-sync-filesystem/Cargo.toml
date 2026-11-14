@@ -19,3 +19,6 @@ day-sync = { workspace = true }
 futures-lite = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
+
+[lints]
+workspace = true
