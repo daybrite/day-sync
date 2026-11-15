@@ -185,10 +185,9 @@ fn network_admission_preserves_outbox_and_incomplete_listing_is_not_success() {
         client.client().set_network_state(NetworkState::Available);
         a.sync(&client).await.unwrap();
         state.lock().unwrap().fault = Fault::IncompleteListing;
-        assert!(matches!(
+        std::assert_matches!(
             a.sync(&client).await,
-            Err(day_sync::Error::Store(e)) if e.kind == StoreErrorKind::IncompleteListing
-        ));
+            Err(day_sync::Error::Store(e)) if e.kind == StoreErrorKind::IncompleteListing);
         assert_eq!(a.snapshot().await.unwrap().bookmarks.len(), 1);
         a.close().await.unwrap();
     });
@@ -205,10 +204,7 @@ fn transport_endpoint_cannot_change_after_receipts_are_bound() {
         let other = WebDavStore::new(
             Client::builder(Endpoint::new("https://other.invalid/dav/").unwrap()).build(),
         );
-        assert!(matches!(
-            a.sync(&other).await,
-            Err(day_sync::Error::WrongEndpoint)
-        ));
+        std::assert_matches!(a.sync(&other).await, Err(day_sync::Error::WrongEndpoint));
         a.close().await.unwrap();
     });
 }
@@ -233,19 +229,19 @@ fn cancelling_in_flight_sync_releases_admission_without_losing_intent() {
         });
         let mut future = Box::pin(a.sync(&client));
         for _ in 0..1000 {
-            assert!(matches!(
+            std::assert_matches!(
                 future
                     .as_mut()
                     .poll(&mut Context::from_waker(Waker::noop())),
                 Poll::Pending
-            ));
+            );
             if !sim.requests().is_empty() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(!sim.requests().is_empty());
-        assert!(matches!(a.sync(&client).await, Err(day_sync::Error::Busy)));
+        std::assert_matches!(a.sync(&client).await, Err(day_sync::Error::Busy));
         drop(future);
         assert_eq!(a.snapshot().await.unwrap().pending_uploads, 1);
         sim.set_conditions(http::simulation::Conditions::default());
@@ -343,10 +339,10 @@ fn server_history_loss_is_reported_without_discarding_local_state() {
             let bytes = s.files.remove(&path).unwrap();
             (path, bytes)
         };
-        assert!(matches!(
+        std::assert_matches!(
             a.sync(&client).await,
             Err(day_sync::Error::RemoteHistoryMissing)
-        ));
+        );
         let after = a.snapshot().await.unwrap();
         assert_eq!(after.candidates, before.candidates);
         assert_eq!(after.frontier, before.frontier);
@@ -386,24 +382,24 @@ fn persistent_bad_data_does_not_block_independent_records_or_advance_missing_dep
                 .insert(key, b"synthetic permanently truncated object".to_vec());
         }
         b.commit(vec![edit()]).await.unwrap();
-        assert!(matches!(
+        std::assert_matches!(
             b.sync(&client).await,
             Err(day_sync::Error::RemoteObjectsRejected { count: 1 })
-        ));
-        assert!(matches!(
+        );
+        std::assert_matches!(
             c.sync(&client).await,
             Err(day_sync::Error::RemoteObjectsRejected { count: 1 })
-        ));
+        );
         let snapshot = c.snapshot().await.unwrap();
         assert_eq!(snapshot.bookmarks.len(), 1); // The independent actor's record applied.
         assert_eq!(snapshot.waiting, 1); // The corrupt predecessor's successor did not.
         assert!(!snapshot.frontier.contains_key(a.actor()));
         assert_eq!(snapshot.frontier.get(b.actor()), Some(&1));
         assert!(!snapshot.poisoned);
-        assert!(matches!(
+        std::assert_matches!(
             c.sync(&client).await,
             Err(day_sync::Error::RemoteObjectsRejected { .. })
-        ));
+        );
         {
             let mut store = state.lock().unwrap();
             let key = store
@@ -478,10 +474,8 @@ fn snapshot_deletion_respects_webdav_contention_rate_limits_and_quota_errors() {
             a.commit(vec![edit()]).await.unwrap();
             a.sync(&client).await.unwrap();
             let error = a.compact(&client).await.unwrap_err();
-            assert!(
-                matches!(error,day_sync::Error::Store(ref e) if e.retry_after==Some(std::time::Duration::from_secs(120))),
-                "{error:?}"
-            );
+            std::assert_matches!(error,day_sync::Error::Store(ref e) if e.retry_after==Some(std::time::Duration::from_secs(120)),
+                "{error:?}");
             assert!(
                 state
                     .lock()

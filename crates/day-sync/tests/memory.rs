@@ -21,10 +21,9 @@ fn memory_store_semantics() {
     block_on(async {
         let store = MemoryStore::new();
         let directory = vec!["space".to_string(), "nested".to_string()];
-        assert!(matches!(
+        std::assert_matches!(
             store.list(&directory).await,
-            Err(e) if e.kind == StoreErrorKind::NotFound
-        ));
+            Err(e) if e.kind == StoreErrorKind::NotFound);
         store.ensure_directory(&directory).await.unwrap();
         assert_eq!(store.list(&directory).await.unwrap(), Vec::<String>::new());
         assert_eq!(
@@ -111,17 +110,11 @@ fn two_replicas_converge_through_a_memory_store() {
             .unwrap()
             .clone();
         assert!(store.lose(&directory, &lost));
-        assert!(matches!(
-            a.sync(&store).await,
-            Err(Error::RemoteHistoryMissing)
-        ));
+        std::assert_matches!(a.sync(&store).await, Err(Error::RemoteHistoryMissing));
         assert_eq!(a.snapshot().await.unwrap().bookmarks, sa.bookmarks);
 
         // A replica never mixes two stores.
-        assert!(matches!(
-            a.sync(&MemoryStore::new()).await,
-            Err(Error::WrongEndpoint)
-        ));
+        std::assert_matches!(a.sync(&MemoryStore::new()).await, Err(Error::WrongEndpoint));
         a.close().await.unwrap();
         b.close().await.unwrap();
     });

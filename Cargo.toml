@@ -5,7 +5,7 @@ members = ["crates/day-sync", "crates/day-sync-webdav", "crates/day-sync-filesys
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.100"
 repository = "https://github.com/daybrite/day-sync"
 license = "MPL-2.0"
 # The protocol is under design review; nothing here is a release until the design settles.

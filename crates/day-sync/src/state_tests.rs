@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Synthetic histories: this replay oracle never calls `State::join`.
 use crate::{state::*, *};
+use std::assert_matches;
 use std::collections::BTreeMap;
 #[derive(Clone)]
 struct Event {
@@ -203,8 +204,8 @@ fn equal_frontiers_cannot_hide_different_candidate_states() {
     );
     a.validate().unwrap();
     b.validate().unwrap();
-    assert!(matches!(a.join(&b), Err(Error::Integrity)));
-    assert!(matches!(b.join(&a), Err(Error::Integrity)));
+    assert_matches!(a.join(&b), Err(Error::Integrity));
+    assert_matches!(b.join(&a), Err(Error::Integrity));
 }
 
 #[test]
@@ -305,8 +306,8 @@ fn dominated_snapshot_cannot_remove_a_newer_states_live_candidate_in_either_orde
     );
     older.validate().unwrap();
     newer.validate().unwrap();
-    assert!(matches!(newer.join(&older), Err(Error::Integrity)));
-    assert!(matches!(older.join(&newer), Err(Error::Integrity)));
+    assert_matches!(newer.join(&older), Err(Error::Integrity));
+    assert_matches!(older.join(&newer), Err(Error::Integrity));
 }
 
 #[test]
@@ -338,15 +339,15 @@ fn candidates_of_one_event_must_agree_across_objects() {
     s.validate().unwrap();
     let key = uuid::Uuid::from_u128(3).to_string();
     s.objects.get_mut(&key).unwrap()[0].revision = 3;
-    assert!(matches!(s.validate(), Err(Error::InvalidWire)));
+    assert_matches!(s.validate(), Err(Error::InvalidWire));
     s.objects.get_mut(&key).unwrap()[0].revision = 2;
     s.objects.get_mut(&key).unwrap()[0].lamport = 2;
-    assert!(matches!(s.validate(), Err(Error::InvalidWire)));
+    assert_matches!(s.validate(), Err(Error::InvalidWire));
     s.objects.get_mut(&key).unwrap()[0].lamport = 1;
     s.objects.get_mut(&key).unwrap()[0].sequence = 2;
     s.objects.get_mut(&key).unwrap()[0].lamport = 2;
     s.objects.values_mut().next().unwrap()[0].lamport = 3; // reverse clocks across objects
-    assert!(matches!(s.validate(), Err(Error::InvalidWire)));
+    assert_matches!(s.validate(), Err(Error::InvalidWire));
 }
 
 #[test]
@@ -396,8 +397,8 @@ fn newer_snapshots_cannot_forget_known_objects_including_tombstones() {
         };
         newer.objects.insert(other.clone(), vec![deletion.clone()]);
         newer.validate().unwrap();
-        assert!(matches!(older.join(&newer), Err(Error::Integrity)));
-        assert!(matches!(newer.join(&older), Err(Error::Integrity)));
+        assert_matches!(older.join(&newer), Err(Error::Integrity));
+        assert_matches!(newer.join(&older), Err(Error::Integrity));
         newer.objects.insert(object.clone(), vec![deletion]);
         assert_eq!(older.join(&newer).unwrap(), newer); // a real delete keeps its candidate
     }
@@ -418,8 +419,5 @@ fn snapshot_encoding_preserves_the_fixed_wire_vector_and_validates_local_state()
     assert_eq!(manifest, Manifest::from_body(bytes).unwrap());
     assert_eq!(manifest.verify(&encoded).unwrap(), state);
     state.heads.values_mut().next().unwrap().lamport = 0;
-    assert!(matches!(
-        Manifest::encode_state(&state),
-        Err(Error::InvalidWire)
-    ));
+    assert_matches!(Manifest::encode_state(&state), Err(Error::InvalidWire));
 }

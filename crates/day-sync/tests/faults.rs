@@ -378,7 +378,7 @@ fn cancellation_releases_admission_but_freeze_prevents_resumed_deletion() {
             futures_lite::future::yield_now().await;
         }
         let token = uuid::Uuid::new_v4().to_string();
-        assert!(matches!(a.freeze(&token).await, Err(Error::Busy)));
+        std::assert_matches!(a.freeze(&token).await, Err(Error::Busy));
         drop(compact);
         a.freeze(&token).await.unwrap();
         let directory = vec![format!("day-sync-v5-{}", space.id)];
@@ -415,7 +415,7 @@ fn known_snapshot_transport_failure_is_not_mistaken_for_corruption() {
         for offset in [2, 3] {
             // retirement/descriptor first, then known manifest and its part
             store.arm('g', offset, false);
-            assert!(matches!(
+            std::assert_matches!(
                 a.sync_with_options(
                     &store,
                     SyncOptions {
@@ -425,7 +425,7 @@ fn known_snapshot_transport_failure_is_not_mistaken_for_corruption() {
                 )
                 .await,
                 Err(Error::Store(_))
-            ));
+            );
             assert_eq!(before, store.inner.objects(&directory));
         }
         a.sync_with_options(

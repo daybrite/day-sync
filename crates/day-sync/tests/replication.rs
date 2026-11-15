@@ -206,14 +206,14 @@ fn malformed_cross_space_and_corrupt_objects_never_advance_frontier() {
         let object = a.local_objects().await.unwrap().remove(0);
         let mut bad = object.clone();
         bad.bytes.push(b' ');
-        assert!(matches!(b.receive(bad).await, Err(Error::Integrity)));
+        std::assert_matches!(b.receive(bad).await, Err(Error::Integrity));
         let mut bad = object.clone();
         bad.filename = "../escape".into();
-        assert!(matches!(b.receive(bad).await, Err(Error::InvalidWire)));
+        std::assert_matches!(b.receive(bad).await, Err(Error::InvalidWire));
         let c = open(d.path().join("c.db"), &Fixture::new().await)
             .await
             .unwrap();
-        assert!(matches!(c.receive(object).await, Err(Error::WrongSpace)));
+        std::assert_matches!(c.receive(object).await, Err(Error::WrongSpace));
         assert_eq!(b.snapshot().await.unwrap().transactions, 0);
         assert_eq!(c.snapshot().await.unwrap().transactions, 0);
         a.close().await.unwrap();
@@ -242,7 +242,7 @@ fn clone_forks_quarantine_including_a_previously_unseen_own_sequence() {
             .await
             .unwrap();
         let foreign = b.local_objects().await.unwrap().pop().unwrap();
-        assert!(matches!(a.receive(foreign).await, Err(Error::Fork)));
+        std::assert_matches!(a.receive(foreign).await, Err(Error::Fork));
         assert!(a.snapshot().await.unwrap().poisoned);
         assert!(
             a.commit(vec![edit(&object, "must not overwrite")])

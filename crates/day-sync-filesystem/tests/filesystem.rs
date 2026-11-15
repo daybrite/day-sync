@@ -58,10 +58,9 @@ fn store_semantics_on_a_directory() {
         let dir = tempfile::tempdir().unwrap();
         let store = FilesystemStore::open(dir.path().join("share")).unwrap();
         let directory = vec!["space".to_string(), "nested".to_string()];
-        assert!(matches!(
+        std::assert_matches!(
             store.list(&directory).await,
-            Err(e) if e.kind == StoreErrorKind::NotFound
-        ));
+            Err(e) if e.kind == StoreErrorKind::NotFound);
         store.ensure_directory(&directory).await.unwrap();
         store.ensure_directory(&directory).await.unwrap();
         assert_eq!(store.list(&directory).await.unwrap(), Vec::<String>::new());
@@ -93,10 +92,8 @@ fn store_semantics_on_a_directory() {
             vec!["nested".to_string()]
         );
         for bad in ["", ".", "..", ".tmp", "a/b", "a\\b", "a\0b"] {
-            assert!(
-                matches!(store.get(&directory, bad).await, Err(e) if e.kind == StoreErrorKind::Invalid),
-                "{bad:?}"
-            );
+            std::assert_matches!(store.get(&directory, bad).await, Err(e) if e.kind == StoreErrorKind::Invalid,
+                "{bad:?}");
         }
         assert!(store.delete(&directory, "a").await.unwrap());
         assert!(!store.delete(&directory, "a").await.unwrap());
@@ -164,7 +161,7 @@ fn two_apps_synchronize_through_a_shared_folder() {
 
         // The folder is only ever one store; a file that disappears is reported, not applied.
         let other = FilesystemStore::open(dir.path().join("elsewhere")).unwrap();
-        assert!(matches!(a.sync(&other).await, Err(Error::WrongEndpoint)));
+        std::assert_matches!(a.sync(&other).await, Err(Error::WrongEndpoint));
         let directory = vec![format!("day-sync-v5-{}", a.space())];
         let lost = store
             .list(&directory)
@@ -174,10 +171,7 @@ fn two_apps_synchronize_through_a_shared_folder() {
             .find(|n| n.starts_with("tx-"))
             .unwrap();
         std::fs::remove_file(store.root().join(&directory[0]).join(&lost)).unwrap();
-        assert!(matches!(
-            a.sync(&store).await,
-            Err(Error::RemoteHistoryMissing)
-        ));
+        std::assert_matches!(a.sync(&store).await, Err(Error::RemoteHistoryMissing));
         for r in replicas.iter().chain([&c]) {
             r.close().await.unwrap();
         }
@@ -226,14 +220,11 @@ fn checkpoint_handoff_through_a_folder() {
         package.publish(&store, &pin).await.unwrap();
 
         // The old space is retired for everyone, in the folder and through the descriptor.
-        assert!(matches!(
-            replicas[1].sync(&store).await,
-            Err(Error::Retired)
-        ));
-        assert!(matches!(
+        std::assert_matches!(replicas[1].sync(&store).await, Err(Error::Retired));
+        std::assert_matches!(
             Space::fetch(&store, replicas[0].space()).await,
             Err(Error::Retired)
-        ));
+        );
 
         // A device bootstraps the new space from the folder and meets the publisher there.
         let fetched = Package::fetch(&store, &pin).await.unwrap();

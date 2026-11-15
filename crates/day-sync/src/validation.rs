@@ -1,12 +1,13 @@
 // Copyright © The Daybrite Project
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
+use std::assert_matches;
 #[test]
 fn format_boundary_rejects_unknown_protection_and_old_encrypted_format() {
     let id = Identity::create_space().unwrap();
     let mut s = id.space.clone();
     s.encoding = "future-encrypted".into();
-    assert!(matches!(s.validate(), Err(Error::UnsupportedFormat)));
+    assert_matches!(s.validate(), Err(Error::UnsupportedFormat));
     assert!(Identity::from_bytes(b"DAYENC02encrypted").is_err());
     let tx = wire::Transaction {
         version: 5,
@@ -35,10 +36,7 @@ fn format_boundary_rejects_unknown_protection_and_old_encrypted_format() {
     assert_eq!(id.decode_record(&bytes).unwrap(), tx);
     let mut other = id.clone();
     other.space.profile = "different-app".into();
-    assert!(matches!(
-        other.decode_record(&bytes),
-        Err(Error::WrongSpace)
-    ));
+    assert_matches!(other.decode_record(&bytes), Err(Error::WrongSpace));
     for n in 0..bytes.len() {
         assert!(id.decode_record(&bytes[..n]).is_err());
     }

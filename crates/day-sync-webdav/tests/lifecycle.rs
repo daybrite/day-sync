@@ -173,10 +173,7 @@ fn stale_receipts_missing_members_and_explicit_retirement() {
             .publish(&client, &package.pin().unwrap())
             .await
             .unwrap();
-        assert!(matches!(
-            rs[2].sync(&client).await,
-            Err(day_sync::Error::Retired)
-        ));
+        std::assert_matches!(rs[2].sync(&client).await, Err(day_sync::Error::Retired));
         assert!(rs[0].sync(&client).await.is_err());
         assert_eq!(target.snapshot().await.unwrap().bookmarks.len(), 1);
         assert!(
@@ -380,10 +377,10 @@ fn plaintext_checkpoint_roundtrip_bounds_recovery_and_fresh_writer() {
         bad[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
         assert!(Package::from_bytes(&bad, &pin).is_err());
         package.publish(&client, &pin).await.unwrap();
-        assert!(matches!(
+        std::assert_matches!(
             Space::fetch(&client, rs[0].space()).await,
             Err(day_sync::Error::Retired)
-        ));
+        );
         let fetched = Package::fetch(&client, &pin).await.unwrap();
         let join = Replica::open(
             d.path().join("join"),
@@ -409,10 +406,7 @@ fn plaintext_checkpoint_roundtrip_bounds_recovery_and_fresh_writer() {
             .collect_history(&client, &package, &pin, &permit)
             .await
             .unwrap();
-        assert!(matches!(
-            rs[2].sync(&client).await,
-            Err(day_sync::Error::Retired)
-        ));
+        std::assert_matches!(rs[2].sync(&client).await, Err(day_sync::Error::Retired));
         for r in rs {
             r.close().await.unwrap();
         }

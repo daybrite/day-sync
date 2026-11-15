@@ -285,7 +285,7 @@ fn comparison_regressions() {
                 .put(&directory(&a), &o.filename, o.bytes)
                 .await
                 .unwrap();
-            assert!(matches!(a.sync(&s).await, Err(Error::Fork)));
+            std::assert_matches!(a.sync(&s).await, Err(Error::Fork));
             assert!(a.snapshot().await.unwrap().poisoned);
             a.close().await.unwrap();
             b.close().await.unwrap();
@@ -307,7 +307,7 @@ fn comparison_regressions() {
                     sa.inner.put(&directory(&a), &n, bytes).await.unwrap();
                 }
             }
-            assert!(matches!(a.sync(&sa).await, Err(Error::Fork)));
+            std::assert_matches!(a.sync(&sa).await, Err(Error::Fork));
             assert!(a.snapshot().await.unwrap().poisoned);
             a.close().await.unwrap();
             b.close().await.unwrap();
@@ -324,10 +324,10 @@ fn comparison_regressions() {
                 .put(&directory(&a), &name, b"synthetic invalid bytes".to_vec())
                 .await
                 .unwrap();
-            assert!(matches!(
+            std::assert_matches!(
                 a.sync(&s).await,
                 Err(Error::RemoteObjectsRejected { count: 1 })
-            ));
+            );
             assert!(!a.snapshot().await.unwrap().poisoned);
             a.close().await.unwrap();
         }
@@ -664,7 +664,7 @@ fn missing_unapplied_predecessor_is_never_invented_by_repair() {
         assert!(b.snapshot().await.unwrap().frontier.is_empty());
         s.inner.lose(&dir, &records[1].filename);
         for _ in 0..2 {
-            assert!(matches!(b.sync(&s).await, Err(Error::RemoteHistoryMissing)));
+            std::assert_matches!(b.sync(&s).await, Err(Error::RemoteHistoryMissing));
             let snapshot = b.snapshot().await.unwrap();
             assert_eq!(snapshot.waiting, 1);
             assert!(snapshot.frontier.is_empty());
@@ -704,7 +704,7 @@ fn zero_deletion_budget_and_freeze_preserve_pending_cleanup_and_report_unrepaire
         assert_eq!(r.deletion_requests, 0);
         assert_eq!(s.take().ops.get("delete"), None);
         s.inner.lose(&directory(&a), &part(&s, &directory(&a)));
-        assert!(matches!(a.sync(&s).await, Err(Error::RemoteHistoryMissing)));
+        std::assert_matches!(a.sync(&s).await, Err(Error::RemoteHistoryMissing));
         assert_eq!(count_records(&s, &directory(&a)), 1);
         a.close().await.unwrap();
     });
@@ -899,8 +899,9 @@ fn pending_input_receipts_preserve_fork_evidence_before_cleanup() {
                     s.put(&dir, &object.filename, object.bytes).await.unwrap();
                 }
                 let before = s.inner.objects(&dir);
-                assert!(
-                    matches!(observer.sync(&s).await, Err(Error::Fork)),
+                std::assert_matches!(
+                    observer.sync(&s).await,
+                    Err(Error::Fork),
                     "snapshot={snapshot} own_actor={own_actor}"
                 );
                 assert!(observer.snapshot().await.unwrap().poisoned);
@@ -1082,13 +1083,13 @@ fn remote_limits_are_errors_not_local_capacity_fallbacks() {
             } else {
                 a.sync(&s).await
             };
-            assert!(matches!(r, Err(Error::Limit)), "{r:?}");
+            std::assert_matches!(r, Err(Error::Limit), "{r:?}");
             assert_eq!(count_records(&s, &directory(&a)), 63);
             assert_eq!(a.snapshot().await.unwrap().pending_uploads, 1);
             a.close().await.unwrap();
             drop(a);
             let a = Replica::open(d.path().join("a"), id.clone()).await.unwrap();
-            assert!(matches!(a.sync(&s).await, Err(Error::Limit)));
+            std::assert_matches!(a.sync(&s).await, Err(Error::Limit));
             assert_eq!(count_records(&s, &directory(&a)), 63);
             s.oversized_manifest.store(false, Ordering::SeqCst);
             a.sync(&s).await.unwrap();
@@ -1206,10 +1207,8 @@ fn insufficient_snapshot_headroom_preserves_the_outbox_until_storage_returns() {
             for _ in 0..2 {
                 let r = a.sync(&s).await;
                 if limit < 4 {
-                    assert!(
-                        matches!(r, Err(Error::Store(ref e)) if e.kind == StoreErrorKind::InsufficientStorage),
-                        "{r:?}"
-                    );
+                    std::assert_matches!(r, Err(Error::Store(ref e)) if e.kind == StoreErrorKind::InsufficientStorage,
+                        "{r:?}");
                     assert_eq!(a.snapshot().await.unwrap().pending_uploads, 65);
                 } else {
                     assert!(r.is_ok(), "{r:?}");

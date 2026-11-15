@@ -164,7 +164,7 @@ fn snapshot_detects_restore_before_upload_and_frozen_space_never_deletes() {
             .await
             .unwrap();
         let before = store.objects(&active(&a));
-        assert!(matches!(copy.sync(&store).await, Err(Error::Fork)));
+        std::assert_matches!(copy.sync(&store).await, Err(Error::Fork));
         assert_eq!(store.objects(&active(&a)), before);
         a.freeze(&id()).await.unwrap();
         assert!(a.compact(&store).await.is_err());
@@ -202,10 +202,7 @@ fn multipart_snapshot_keeps_large_values_and_unpublished_suffix() {
             .find(|(n, _)| n.contains(".part-"))
             .unwrap();
         store.lose(&active(&a), &part);
-        assert!(matches!(
-            b.sync(&store).await,
-            Err(Error::RemoteHistoryMissing)
-        ));
+        std::assert_matches!(b.sync(&store).await, Err(Error::RemoteHistoryMissing));
         assert_eq!(b.snapshot().await.unwrap().candidates.len(), 1);
         store.put(&active(&a), &part, bytes).await.unwrap();
         b.sync(&store).await.unwrap();
@@ -419,7 +416,7 @@ fn oversized_state_keeps_outbox_and_can_compact_after_values_shrink() {
         let count = a.local_objects().await.unwrap().len();
         let before = store.objects(&active(&a));
         let failure = a.compact(&store).await.unwrap_err();
-        assert!(matches!(failure, Error::Limit), "{failure}");
+        std::assert_matches!(failure, Error::Limit, "{failure}");
         assert_eq!(store.objects(&active(&a)), before);
         assert_eq!(a.local_objects().await.unwrap().len(), count);
         let report = a.sync(&store).await.unwrap();
