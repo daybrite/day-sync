@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/day-sync", "crates/day-sync-webdav", "crates/day-sync-filesystem"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.100"
 repository = "https://github.com/daybrite/day-sync"
