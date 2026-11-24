@@ -1,0 +1,21 @@
+# The Day project manifest: https://daybrite.dev/docs/reference/cli#the-conventional-project
+# `name` and `version` come from Cargo.toml.
+schema = 1
+
+[app]
+id = "dev.daybrite.syncdevicelab"
+title = "Sync Device Lab"
+build = 1
+targets = ["ios-uikit", "android-material"]
+
+# The window's size and minimum size in points, for every platform with resizable windows.
+[window]
+width = 960
+height = 640
+min_width = 320
+min_height = 400
+
+# Report which element ids the dayscripts reach: https://daybrite.dev/docs/how-to/dayscript
+[dayscript.coverage]
+enabled = true
+

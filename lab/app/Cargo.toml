@@ -1,0 +1,60 @@
+[package]
+name = "sync-device-lab"
+version.workspace = true
+edition = "2024"
+
+[features]
+# `mock` keeps bare cargo and rust-analyzer compiling; `day build` overrides it with
+# `--no-default-features --features <backend>` (https://daybrite.dev/docs/reference/project-structure).
+default = ["mock"]
+appkit = ["day/appkit"]
+gtk = ["day/gtk"]
+qt = ["day/qt"]
+uikit = ["day/uikit"]
+material = ["day/material"]
+winui = ["day/winui"]
+arkui = ["day/arkui"]
+dom = ["day/dom"]
+mock = ["day/mock"]
+
+# Cargo defaults to rlib; the mobile pipeline requests staticlib/cdylib via `cargo rustc`.
+[lib]
+# A constant lib name: staged artifacts and the `dayapp::` import never move on a package rename.
+name = "dayapp"
+
+[dependencies]
+day = { package = "day-app", version = "0.*", features = ["model"] }
+day-sync = { path = "../../crates/day-sync" }
+day-sync-webdav = { path = "../../crates/day-sync-webdav" }
+day-process = "0.*"
+day-reactive = "0.*"
+day-part-wakelock = "0.*"
+futures-lite = "2"
+serde_json = "1"
+# The items are saved as JSON in the preferences (src/model.rs).
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+day-build = { version = "0.*" }
+
+# Lint policy: Clippy's default lints plus a short list that catches defects rather than style.
+# The project's CI treats every warning as an error (`cargo clippy --all-targets -- -D warnings`),
+# so a finding blocks the change that introduced it. Fix findings in the code; for a site where
+# the lint is wrong, use `#[expect(clippy::<lint>, reason = "…")]`. A stricter table, up to
+# Clippy's `pedantic` group, is the project's choice; keep these lines in it.
+[lints.clippy]
+# Debugging and placeholder macros do not ship.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+# Every `unsafe` block states why it is sound in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "warn"
+# `unwrap()` aborts the app with no explanation. Return the error, or use `expect("…")` with the
+# invariant that makes the failure impossible. Tests are exempt (clippy.toml).
+unwrap_used = "warn"
+
+
+[workspace]
+
+[workspace.package]
+version = "0.1.0"

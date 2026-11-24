@@ -60,8 +60,12 @@ fn convert(error: DavError) -> StoreError {
             },
             *retry_after,
         ),
+        DavError::Transport {
+            source: day_webdav::http::HttpError::BodyTooLarge { .. },
+            ..
+        }
+        | DavError::Limit => (K::Limit, None),
         DavError::Transport { .. } | DavError::Deferred(_) => (K::Unavailable, None),
-        DavError::Limit => (K::Limit, None),
         DavError::InvalidEndpoint
         | DavError::InvalidPath
         | DavError::UnsafeHref

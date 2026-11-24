@@ -121,6 +121,10 @@ pub struct Snapshot {
     pub required_revision: u32,
     pub poisoned: bool,
 }
+enum RecordRead {
+    Complete(Option<Error>),
+    ListedRecordDisappeared(String),
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Checkpoint {
     BeforeJournal,
@@ -769,14 +773,75 @@ impl Replica {
         let names = self.sync_members(store, &directory).await?;
         Ok((directory, names))
     }
-    pub(crate) async fn read_records(
+    // A listing is not a transaction with the subsequent GETs. A peer may replace the
+    // listed raw history with a complete snapshot in between them. Refresh at most twice,
+    // retaining the same report (and therefore the same deletion/publication budgets).
+    // Never turn disappearance into success unless the record reappears or a validated
+    // snapshot has advanced our frontier over its exact head/prefix.
+    pub(crate) async fn read_inputs(
+        &self,
+        store: &dyn Store,
+        directory: &[String],
+        mut names: Vec<String>,
+        audit: bool,
+        report: &mut SyncReport,
+        options: SyncOptions,
+    ) -> Result<(compaction::SnapshotScan, Option<Error>), Error> {
+        let mut disappeared: Option<String> = None;
+        for refresh in 0..=2 {
+            let scan = self
+                .download_snapshots(store, directory, &names, audit, report)
+                .await?;
+            if let Some(name) = disappeared.take()
+                && !names.contains(&name)
+            {
+                let (actor, sequence, hash) = wire::parse_filename(&name)?;
+                let covered = self
+                    .db
+                    .read(move |db| {
+                        db.try_with_connection(|c| {
+                            let head = rows(
+                                c,
+                                "SELECT sequence,hash FROM _day_sync_frontiers WHERE actor=?",
+                                &[text(actor)],
+                            )?
+                            .pop();
+                            head.map_or(Ok(false), |head| {
+                                let through = number(&head[0])?;
+                                Ok(through > sequence
+                                    || (through == sequence && head[1].as_text()? == hash))
+                            })
+                        })
+                    })
+                    .await?;
+                if !covered {
+                    return Err(StoreError::new(StoreErrorKind::NotFound).into());
+                }
+            }
+            match self
+                .read_records(store, directory, report, names, options)
+                .await?
+            {
+                RecordRead::Complete(error) => return Ok((scan, error)),
+                RecordRead::ListedRecordDisappeared(name) if refresh < 2 => {
+                    disappeared = Some(name);
+                    names = store.list(directory).await?;
+                }
+                RecordRead::ListedRecordDisappeared(_) => {
+                    return Err(StoreError::new(StoreErrorKind::NotFound).into());
+                }
+            }
+        }
+        unreachable!("bounded input refresh returns on its final attempt")
+    }
+    async fn read_records(
         &self,
         store: &dyn Store,
         directory: &[String],
         report: &mut SyncReport,
         names: Vec<String>,
         options: SyncOptions,
-    ) -> Result<Option<Error>, Error> {
+    ) -> Result<RecordRead, Error> {
         if names.len() > wire::MAX_LISTING {
             return Err(Error::Limit);
         }
@@ -905,10 +970,9 @@ impl Replica {
                 // dots and head hashes must still be read and validated before any cleanup.
                 continue;
             }
-            let bytes = store
-                .get(directory, &name)
-                .await?
-                .ok_or_else(|| StoreError::new(StoreErrorKind::NotFound))?;
+            let Some(bytes) = store.get(directory, &name).await? else {
+                return Ok(RecordRead::ListedRecordDisappeared(name));
+            };
             match self
                 .receive(Object {
                     filename: name.clone(),
@@ -974,12 +1038,14 @@ impl Replica {
             .await?;
         report.applied += self.apply_ready().await?;
         if missing {
-            return Ok(Some(Error::RemoteHistoryMissing));
+            return Ok(RecordRead::Complete(Some(Error::RemoteHistoryMissing)));
         }
         if rejected != 0 {
-            return Ok(Some(Error::RemoteObjectsRejected { count: rejected }));
+            return Ok(RecordRead::Complete(Some(Error::RemoteObjectsRejected {
+                count: rejected,
+            })));
         }
-        Ok(None)
+        Ok(RecordRead::Complete(None))
     }
     /// Force the journal through the drive cache before any of it leaves the device: a
     /// checkpoint, with full fsync where the platform needs it. A record the store has seen
@@ -1096,17 +1162,15 @@ impl Replica {
         let _guard = RunGuard(self.running.clone());
         let (directory, names) = self.connect(store).await?;
         let mut report = SyncReport::default();
-        let scan = self
-            .download_snapshots(
+        let (scan, read_error) = self
+            .read_inputs(
                 store,
                 &directory,
-                &names,
+                names,
                 options.verify_snapshots,
                 &mut report,
+                options,
             )
-            .await?;
-        let read_error = self
-            .read_records(store, &directory, &mut report, names, options)
             .await?;
         let lost = scan.finish(self).await?;
         let repair = !lost.is_empty();

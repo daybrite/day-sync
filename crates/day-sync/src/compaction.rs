@@ -332,11 +332,8 @@ impl Replica {
         let _guard = RunGuard(self.running.clone());
         let (directory, names) = self.connect(store).await?;
         let mut report = SyncReport::default();
-        let scan = self
-            .download_snapshots(store, &directory, &names, true, &mut report)
-            .await?;
-        let read_error = self
-            .read_records(store, &directory, &mut report, names, options)
+        let (scan, read_error) = self
+            .read_inputs(store, &directory, names, true, &mut report, options)
             .await?;
         let lost = scan.finish(self).await?;
         self.compact_inner(store, &directory, &mut report, options)
@@ -429,6 +426,25 @@ impl Replica {
                 }
                 Err(e) => return Err(e), // Transport failures retain their original retry semantics.
             }
+        }
+        // A snapshot import retains our unpublished outbox. A later reconciliation can
+        // mark those same rows published, after the one-time import pruning has run.
+        // Another replica may then legitimately delete the raw records. Reapply pruning
+        // against still-visible, validated snapshots before checking for missing history;
+        // otherwise a cached snapshot makes that normal cleanup look like data loss.
+        // Keep unpublished rows and exact loaded receipts (including fork evidence).
+        let heads: Vec<_> = visible.values().map(|m| m.heads.clone()).collect();
+        if !heads.is_empty() {
+            self.db
+                .write_with_origin(WriteOrigin::Maintenance, move |db| {
+                    db.try_with_connection(|c| {
+                        for head in &heads {
+                            prune(c, head, false)?;
+                        }
+                        Ok(())
+                    })
+                })
+                .await?;
         }
         // A complete successor makes an old missing witness irrelevant. Keep the old receipt
         // until a future compaction cleans it; do not keep republishing on every idle attempt.

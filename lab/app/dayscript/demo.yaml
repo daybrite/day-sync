@@ -1,0 +1,7 @@
+name: sync-lab
+on_failure: stop
+flow:
+  - wait_for: { id: lab_title }
+  - assert_text: { id: lab_title, key: lab_running }
+  - assert_text: { id: lab_body, key: lab_body }
+  - screenshot: sync-lab

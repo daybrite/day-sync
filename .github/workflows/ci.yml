@@ -7,8 +7,9 @@ name: ci
 # then the WebDAV crate again with its `reqwest` provider, and clippy for the mobile targets.
 # The second set names that one crate: the provider changes nothing in the engine, and a second
 # pass over the engine's suite (durable transactions, several times slower on the Windows
-# runner) overran the workflow's thirty-minute test step. There is no demo app, so the demo and
-# website legs are skipped, and the crate is `publish = false`, so nothing goes to crates.io.
+# runner) overran the workflow's thirty-minute test step. The configured physical-device lab
+# is separate from the shared demo/website legs. The crate is `publish = false`, so nothing
+# goes to crates.io.
 # A push builds against the head of day's main branch and of every other Day repository's
 # default branch; the nightly run builds against the newest releases.
 on:
@@ -21,6 +22,14 @@ on:
         description: Build against day's main branch instead of the newest release
         type: boolean
         default: false
+      stress-seed:
+        description: First stress seed (empty chooses a new range for this workflow run)
+        type: string
+        default: ""
+      stress-seeds:
+        description: Number of replayable stress schedules
+        type: string
+        default: "256"
   schedule:
     - cron: "0 23 * * *" # 23:00 Eastern; staggered across daybrite.
       timezone: America/New_York
@@ -42,3 +51,41 @@ jobs:
       day-main: ${{ inputs.day-main || false }}
       feature-sets: -p day-sync-webdav --features day-sync-webdav/reqwest
       publish: false
+
+  stress:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: daybrite/actions/.github/actions/day-deps@v1
+        with:
+          day-deps: ${{ inputs.day-main && 'main' || 'published' }}
+      - name: Fetch dependencies before the offline campaign
+        run: cargo fetch
+      - name: Replayable fault schedules
+        timeout-minutes: 35
+        env:
+          FIRST_SEED: ${{ inputs.stress-seed }}
+          SEED_COUNT: ${{ inputs.stress-seeds || '256' }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          first="${FIRST_SEED:-$((RUN_NUMBER * 256))}"
+          python3 scripts/stress.py --seed "$first" --seeds "$SEED_COUNT" --steps 512 --timeout 120
+      - name: Preserve failure and timeout evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sync-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/stress/
+          retention-days: 14
+          if-no-files-found: warn
+
+  lab-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify the device lab's oracle and HTTP fault fixture
+        run: python3 -m unittest discover -s lab -p 'test_*.py'

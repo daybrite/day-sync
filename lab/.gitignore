@@ -1,0 +1,8 @@
+app/target/
+app/build/
+app/.day/
+app/Cargo.lock
+app/resource/assets/lab.json
+app/platform/ios/DayApp.local.xcconfig
+__pycache__/
+runs/

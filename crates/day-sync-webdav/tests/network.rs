@@ -496,3 +496,27 @@ fn snapshot_deletion_respects_webdav_contention_rate_limits_and_quota_errors() {
         }
     });
 }
+
+#[test]
+fn response_bound_is_a_capacity_error_not_a_transient_outage() {
+    let simulation = Simulation::new();
+    simulation.handle(
+        |_, _| true,
+        |_| Ok(Reply::new(200, b"synthetic payload".to_vec())),
+    );
+    let session = http::Session::new();
+    session.set_simulation(Some(simulation.clone()));
+    let client = WebDavStore::new(
+        Client::builder(Endpoint::new("https://fixture.invalid/dav/").unwrap())
+            .session(session)
+            .policy(Policy {
+                max_response_bytes: 4,
+                ..Policy::default()
+            })
+            .build(),
+    );
+    let error = block_on(day_sync::Store::get(&client, &[], "synthetic.bin")).unwrap_err();
+    assert_eq!(error.kind, StoreErrorKind::Limit);
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(simulation.requests().len(), 1);
+}

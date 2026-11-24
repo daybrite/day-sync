@@ -63,6 +63,8 @@ fresh v5 stores; there is no automatic migration.
 
 - [How synchronization works](docs/synchronization.md), with illustrated scenarios.
 - [Protocol and integration reference](docs/protocol-reference.md), including limits and recovery.
+- [Physical-device fault lab](lab/README.md), with a disposable server, independent history oracle,
+  and [recorded Pixel/iPhone qualification results](lab/RESULTS-2026-11-23.md).
 - [Automerge experiment and decision](docs/automerge-experiment.md), recording why the prototype was retired.
 
 The [development instructions](docs/protocol-reference.md#development) cover dependencies and

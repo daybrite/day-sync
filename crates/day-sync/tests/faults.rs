@@ -441,86 +441,56 @@ fn known_snapshot_transport_failure_is_not_mistaken_for_corruption() {
     });
 }
 
+#[path = "support/stress.rs"]
+mod stress;
+
+#[test]
+fn a_lost_upload_receipt_covered_by_a_known_snapshot_is_not_missing_history() {
+    block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let space = Identity::create_space().unwrap().space;
+        let store = Faults::new();
+        let a = open(directory.path(), "a", &space).await;
+        let b = open(directory.path(), "b", &space).await;
+        a.sync(&store).await.unwrap();
+        a.commit(vec![edit(&uuid::Uuid::new_v4().to_string(), 1)])
+            .await
+            .unwrap();
+        // The server has the edit but its author has no durable publication receipt yet.
+        store.arm('p', 0, true);
+        let result = a.sync(&store).await;
+        assert!(matches!(result, Err(Error::Store(_))), "{result:?}");
+        assert_eq!(a.snapshot().await.unwrap().pending_uploads, 1);
+        b.sync(&store).await.unwrap();
+        b.compact_with_options(
+            &store,
+            SyncOptions {
+                max_deletions: 0,
+                ..SyncOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        // Import the covering snapshot, then reconcile the previously lost receipt.
+        a.sync(&store).await.unwrap();
+        assert_eq!(a.snapshot().await.unwrap().pending_uploads, 0);
+        // Another writer finishes legitimate cleanup. The snapshot is already known to A.
+        b.compact(&store).await.unwrap();
+        let report = a.sync(&store).await.unwrap();
+        assert!(
+            !report.repaired_history,
+            "existing snapshot already preserves this history"
+        );
+        assert_eq!(
+            a.snapshot().await.unwrap().candidates,
+            b.snapshot().await.unwrap().candidates
+        );
+        a.close().await.unwrap();
+        b.close().await.unwrap();
+    });
+}
+
 #[test]
 fn seeded_restart_and_transport_schedules_match_original_operation_replay() {
-    block_on(async {
-        for initial in 0..scaled(32) {
-            let d = tempfile::tempdir().unwrap();
-            let space = Identity::create_space().unwrap().space;
-            let store = Faults::new();
-            let identities: Vec<_> = (0..3)
-                .map(|_| Arc::new(Identity::join(space.clone()).unwrap()))
-                .collect();
-            let mut replicas = Vec::new();
-            for (i, identity) in identities.iter().enumerate() {
-                replicas.push(
-                    Replica::open(d.path().join(format!("r{i}")), identity.clone())
-                        .await
-                        .unwrap(),
-                );
-            }
-            let objects: Vec<_> = (1..=5)
-                .map(|n| uuid::Uuid::from_u128(n).to_string())
-                .collect();
-            let mut seed = initial + 1;
-            let mut history = Vec::new();
-            for step in 0..128 {
-                seed = seed
-                    .wrapping_mul(6_364_136_223_846_793_005)
-                    .wrapping_add(1_442_695_040_888_963_407);
-                let i = ((seed >> 32) % 3) as usize;
-                match seed % 6 {
-                    0 | 1 => {
-                        replicas[i]
-                            .commit(vec![edit(&objects[((seed >> 40) % 5) as usize], step)])
-                            .await
-                            .unwrap();
-                        history.push(replicas[i].local_objects().await.unwrap().pop().unwrap());
-                    }
-                    2 => {
-                        replicas[i].close().await.unwrap();
-                        replicas[i] =
-                            Replica::open(d.path().join(format!("r{i}")), identities[i].clone())
-                                .await
-                                .unwrap();
-                    }
-                    _ => {
-                        let op = ['l', 'g', 'c', 'p', 'd'][((seed >> 48) % 5) as usize];
-                        store.arm(op, ((seed >> 56) % 8) as usize, seed & (1 << 12) != 0);
-                        let result = if seed & 128 != 0 {
-                            replicas[i].compact(&store).await
-                        } else {
-                            replicas[i].sync(&store).await
-                        };
-                        assert!(
-                            result.is_ok() || matches!(result, Err(Error::Store(_))),
-                            "seed={initial} step={step} op={op}: {result:?}"
-                        );
-                        *store.fault.lock().unwrap() = None;
-                    }
-                }
-            }
-            for _ in 0..3 {
-                for r in &replicas {
-                    r.sync(&store).await.unwrap();
-                }
-            }
-            replicas[0].compact(&store).await.unwrap();
-            let fresh = open(d.path(), "fresh", &space).await;
-            fresh.sync(&store).await.unwrap();
-            let oracle = open(d.path(), "oracle", &space).await;
-            for object in history {
-                oracle.receive(object).await.unwrap();
-            }
-            oracle.apply_ready().await.unwrap();
-            let expected = oracle.snapshot().await.unwrap();
-            for r in replicas.iter().chain([&fresh]) {
-                let got = r.snapshot().await.unwrap();
-                assert_eq!(got.candidates, expected.candidates, "seed={initial}");
-                assert_eq!(got.bookmarks, expected.bookmarks, "seed={initial}");
-                r.close().await.unwrap();
-            }
-            oracle.close().await.unwrap();
-        }
-    });
+    block_on(stress::run());
 }

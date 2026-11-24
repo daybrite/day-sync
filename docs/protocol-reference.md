@@ -156,6 +156,14 @@ report missing history. Missing published raw history retains `RemoteHistoryMiss
 attempt that discovers it, even when applied state is republished; retry confirms recovery.
 Missing unapplied predecessors are never invented.
 
+A raw record can disappear between a successful listing and its GET when a peer compacts.
+Sync and explicit compaction refresh the input listing and snapshot scan at most twice in
+that case. If the name has disappeared from the refreshed listing, a validated snapshot
+must cover its sequence (and exact hash when it is the head) before the call can continue.
+No covering state means `Store(NotFound)`, not success. Reports and maintenance budgets
+are shared across these refreshes; transport, authentication, corruption, and fork errors
+are not converted into this retry path.
+
 An incomplete older snapshot can remain as residue when valid state covers it. Its header grants
 no deletion authority. Covered records that reappear are ignored unless exact retained evidence
 requires validation. Unobserved uploads and abandoned parts may remain until coordinated epoch
@@ -300,6 +308,95 @@ costs; it does not measure production network performance:
 ```sh
 cargo test -p day-sync --test measurements -- --ignored --nocapture
 ```
+
+### Reproducible reliability campaigns
+
+Run a wider set of synthetic restart, transport-failure and compaction schedules with:
+
+```sh
+python3 scripts/stress.py --seed 1000 --seeds 1000 --steps 512 --timeout 300
+```
+
+The runner builds once using the local Cargo configuration, runs each seed in its own test
+process, and writes the revision, toolchain, working-tree status and diff, harness source,
+dependency lock, build output, per-seed logs and machine-readable results below
+`target/stress/campaign-*`. `--output DIRECTORY` chooses
+another location. The build uses `--offline`; resolve dependencies before starting a campaign.
+A nonzero exit status means at least one seed failed or exceeded its wall-time limit. A timeout
+kills the test executable itself, not just its Cargo parent. No server or account is contacted.
+
+The schedule uses deterministic space, actor and object identities. It mixes local writes,
+deletions, reopenings, sync and compaction, with failures before or after storage operations.
+After faults stop, existing processes must converge without another restart. A reader kept
+offline during the schedule and a fresh reader must also converge. Final candidates, resolved
+values, frontiers, outboxes and pending application work are checked. The reference model scans
+the original operation history for causal supersession and resolves winners separately; it
+does not call the production merge or projection code. It uses the authored causal contexts,
+so this check complements, rather than replaces, tests of context construction and application
+adapters. This is a deterministic **operation schedule**, not yet a virtual-clock simulation
+of all asynchronous interleavings, platform networking or disk behavior.
+
+On assertion failure, the test preserves its SQLite databases, original operations,
+`schedule.jsonl`, remote object bytes and a `replay.json` command. A timeout also leaves the
+on-disk schedule and databases, but cannot run the failure destructor that exports remote
+memory. Fixtures contain synthetic content only. Successful fixture directories are removed;
+campaign logs and results remain. Replay one seed directly with:
+
+```sh
+DAY_SYNC_STRESS_SEED=1023 DAY_SYNC_STRESS_SEEDS=1 DAY_SYNC_STRESS_STEPS=512 \
+  cargo test -p day-sync --test faults \
+  seeded_restart_and_transport_schedules_match_original_operation_replay -- --exact --nocapture
+```
+
+Seed 1023 exposed a false `RemoteHistoryMissing` result after a lost upload acknowledgement,
+import of a covering snapshot, reconciliation of the upload receipt, and another replica's
+cleanup. Import retained the then-unpublished outbox row; subsequent snapshot-cache hits did
+not prune it after publication. The regression test
+`a_lost_upload_receipt_covered_by_a_known_snapshot_is_not_missing_history` covers that sequence.
+Visible validated snapshots now also prune already-published covered rows, preserving
+unpublished changes and exact deletion/fork receipts. Genuine missing-history tests remain
+part of the release gate; hiding the error or accepting it as a random-test outcome is not a fix.
+
+### Qualification beyond the engine
+
+Treat correctness, recovery and diagnosis as separate acceptance criteria. Proposed release
+gates below are targets to measure, not claims that the current implementation has passed.
+
+| Layer | Required scenarios | Evidence and acceptance criterion |
+|---|---|---|
+| Protocol | Multiple writers, deletes/resurrection, stale and duplicate records, gaps, old/new revisions, cloned identities, snapshot cleanup with long-offline peers | Independent-model agreement; no lost accepted edit or resurrected deletion; forks and unknown formats fail explicitly. Every discovered seed becomes a focused permanent regression. |
+| Persistence | Kill at every durable checkpoint; full disk before/after commit; database busy; backup/restore with correct identity handling | An acknowledged local edit survives reopen; failed commits do not leak partial edits; no cleanup without a complete verified replacement. |
+| HTTP and WebDAV | Lost acknowledgements, partial bodies, truncated XML, response stalls, disconnect mid-body, 401/403/429/5xx/507, Retry-After, TLS/DNS failures, stale listings | Correct error category; bounded waits; no unsafe replay of ambiguous writes; catch-up after recovery using the same process. Run both native and reqwest against disposable Apache/Nextcloud fixtures, then an isolated Fastmail test folder. |
+| App scheduler | Edit during sync, repeated manual refresh, background/foreground, suspension during every request, changing connectivity, credential repair | No overlapping sync sessions, lost wakeups or permanent busy state; retry policy respects server delays; a successful partial pass does not imply all work completed. Use a controllable clock to test the scheduler's state machine. |
+| Real devices | Two iPhones plus desktop; Wi-Fi/cellular/hotspot changes; Low Data Mode; VPN changes; lock/unlock; force-quit/reopen; reboot; low storage | A synthetic operation ledger agrees on every device after foreground recovery. Capture build, platform, attempt timeline and progress before restarting a failure away. |
+| Scale and soak | 1k/10k/50k objects, large offline backlogs, 2/3/8/32 actors, 24–72 hour runs | Record convergence p50/p95/p99, bytes and requests per edit, startup catch-up time, peak memory, disk growth, idle traffic and battery use. Set explicit budgets from a baseline, then gate regressions. |
+
+Use a small diagnostic app with a distinct bundle ID, private disposable sync namespace,
+generated localized controls, and synthetic records that include a test-run ID and operation
+number. It must use the production persistence adapter, transport and scheduler; a rewritten
+demo scheduler would miss the failure class we need to exercise. A desktop controller should
+record intended edits independently and compare every replica's retained state and displayed
+state. Never inject destructive faults into an actual reading library. Keep the previous
+released build in the device matrix to expose compatibility regressions.
+
+The normal CI suite keeps focused regressions and the bounded seed set on every PR. The
+scheduled and manually dispatched `stress` job adds 256 seeds of 512 steps, choosing the
+first seed from the workflow run number and retaining campaign artifacts for 14 days.
+Manual dispatch accepts `stress-seed` and `stress-seeds` for replay. The job bounds each seed
+to 120 seconds and the campaign step to 35 minutes. Local runs have configurable limits.
+Longer device/server/scale soaks remain a release-qualification task. A passing run establishes
+evidence only for that workload and environment, including the resolved dependency revisions.
+Compare other sync solutions using the same consistency guarantees, workload and network
+conditions before making performance or reliability claims. A small state-machine model of
+publication, cleanup and restore is a useful additional check of protocol invariants; it does
+not replace execution of the production code.
+
+This layered approach follows the combination of simulation, live performance and hardware
+failure testing described by [FoundationDB](https://apple.github.io/foundationdb/testing.html).
+Mobile tests are essential: Apple's
+[connectivity-waiting behavior](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/waitsforconnectivity)
+distinguishes waiting for an initial connection from a connection that drops during a transfer;
+neither a simulated store nor a desktop pass proves iPhone recovery behavior.
 
 External-provider tests require disposable isolated fixtures. The
 [interop script](../scripts/interop.py) describes the Apache and Nextcloud setup; do not point it
