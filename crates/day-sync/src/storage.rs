@@ -157,6 +157,11 @@ impl TransactionParticipant for Journal {
                 WriteOrigin::Maintenance => 0,
             })],
         )?;
+        if origin == WriteOrigin::RemoteImport
+            && let Some(app) = &self.application
+        {
+            app.before_import(c)?;
+        }
         if origin != WriteOrigin::Maintenance {
             healthy(c)?;
         }

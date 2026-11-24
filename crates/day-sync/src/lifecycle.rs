@@ -566,6 +566,7 @@ impl Replica {
         }
         let _guard = crate::RunGuard(self.running.clone());
         let token = token.to_owned();
+        let app = self.application.clone();
         self.db
             .write_with_origin(WriteOrigin::Maintenance, move |db| {
                 db.try_with_connection(|c| {
@@ -577,6 +578,9 @@ impl Replica {
                             return Err(storage::error("sync.other_fence"));
                         }
                     } else {
+                        if let Some(app) = &app {
+                            app.before_freeze(c)?;
+                        }
                         // Package capacity depends on the final common cut, not a lifetime
                         // record count. Freeze itself is an irreversible local barrier.
                         c.execute("INSERT INTO _day_sync_fence VALUES(1,?)", &[text(token)])?;
@@ -812,6 +816,77 @@ impl Replica {
             })
             .await?;
         Ok(())
+    }
+    /// Back up a retired media pool and copy all surviving candidates' assets to the new
+    /// space before reclaiming at most `limit` old objects. Supply an independent backup
+    /// store, for example an external filesystem. Safe to retry after any interrupted step.
+    /// # Errors
+    /// Refuses an active or mismatched epoch, an unverified checkpoint, a shared backup
+    /// endpoint, an unsupported profile, or missing/corrupt referenced data.
+    pub async fn collect_checkpoint_assets(
+        &self,
+        store: &dyn Store,
+        backup: &dyn Store,
+        pin: &CheckpointPin,
+        limit: usize,
+    ) -> Result<usize, Error> {
+        if store.endpoint() == backup.endpoint() || pin.source != self.space_descriptor() {
+            return Err(Error::WrongEndpoint);
+        }
+        let app = self.application.clone().ok_or(Error::UnsupportedFormat)?;
+        let package = Package::fetch(store, pin).await?;
+        let destination = package.destination(pin)?;
+        let old = [format!("day-sync-v5-{}", self.space())];
+        if get_required(store, &old, "retired.json").await? != identity::encode(pin)? {
+            return Err(Error::Integrity);
+        }
+        let expected = package.verify(pin)?.body.cut;
+        let hash = pin.hash.clone();
+        let endpoint = store.endpoint();
+        let refs = self
+            .db
+            .read(move |db| {
+                db.try_with_connection(|c| {
+                    if storage::config(c)?[4].as_text()? != endpoint
+                        || cut(c)?.0 != expected
+                        || rows(c, "SELECT hash FROM _day_sync_handoff WHERE id=1", &[])?
+                            .first()
+                            .ok_or_else(invalid)?[0]
+                            .as_text()?
+                            != hash
+                    {
+                        return Err(invalid());
+                    }
+                    app.before_freeze(c)?;
+                    let mut refs = BTreeSet::new();
+                    for row in rows(
+                        c,
+                        "SELECT object,actor,sequence,value FROM _day_sync_candidates",
+                        &[],
+                    )? {
+                        let v = crate::decode_candidate(&row)?;
+                        refs.extend(app.asset_references(&Change {
+                            id: v.id,
+                            value: v.value,
+                        })?);
+                    }
+                    Ok(refs)
+                })
+            })
+            .await?;
+        package.publish(backup, pin).await?;
+        Package::fetch(backup, pin).await?;
+        let inventory = crate::assets::backup_pool(store, backup, self.space()).await?;
+        for asset in refs {
+            crate::assets::copy(backup, self.space(), store, destination.space(), &asset).await?;
+        }
+        let mut count = 0;
+        for (dir, name) in inventory.into_iter().take(limit) {
+            if store.delete(&dir, &name).await? {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
     /// Deletes ONLY old transaction paths checksummed into this terminal handoff, and only after
     /// fetching/verifying every checkpoint byte. Interrupted DELETEs are idempotent. This

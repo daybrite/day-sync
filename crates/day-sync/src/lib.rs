@@ -5,6 +5,9 @@
 //! A versioned record boundary reserves room for a future separately reviewed protected format.
 #![cfg(not(target_arch = "wasm32"))]
 mod application;
+pub mod assets;
+mod record;
+pub use record::RecordKey;
 pub mod lifecycle;
 mod membership;
 pub use application::Application;
@@ -222,6 +225,55 @@ impl Drop for RunGuard {
         self.0.store(false, Ordering::Release);
     }
 }
+fn decode_candidate(r: &[Value]) -> Result<Candidate, DbError> {
+    Ok(Candidate {
+        id: r[0].as_text()?.into(),
+        actor: r[1].as_text()?.into(),
+        sequence: number(&r[2])?,
+        value: if r[3] == Value::Null {
+            None
+        } else {
+            Some(
+                serde_json::from_slice(r[3].as_blob()?)
+                    .map_err(|_| error("sync.invalid_candidate"))?,
+            )
+        },
+    })
+}
+fn object_candidates(
+    c: &mut dyn day_persistence::SqliteConnection,
+    id: &str,
+    revision: u32,
+) -> Result<Vec<Candidate>, DbError> {
+    let rows = rows(
+        c,
+        "SELECT object,actor,sequence,value FROM _day_sync_candidates
+         WHERE object=? AND requires<=? ORDER BY actor,sequence",
+        &[text(id), Value::Int(i64::from(revision))],
+    )?;
+    rows.iter().map(|r| decode_candidate(r)).collect()
+}
+fn stage_change(db: &ModelContainer, change: Change) -> Result<(), DbError> {
+    if let Some(v) = change.value {
+        // insert's keyed collection replaces a matching identity; materialize first
+        // so the existing row and its update participate in normal persistence.
+        db.try_get::<Bookmark>(change.id.clone())?;
+        db.insert(Bookmark {
+            id: change.id.clone(),
+            url: v.url,
+            title: v.title,
+        });
+    } else {
+        db.delete::<Bookmark>(change.id.clone())?;
+    }
+    db.try_with_connection(|c| {
+        c.execute(
+            "INSERT OR IGNORE INTO _day_sync_dirty(object) VALUES(?)",
+            &[text(change.id)],
+        )?;
+        Ok(())
+    })
+}
 impl Replica {
     /// Open a v5 plaintext store. Persist public identity alongside the database. Older formats
     /// are rejected; an old encrypted space is never silently converted.
@@ -379,25 +431,7 @@ impl Replica {
         self.db
             .write(move |db| {
                 for change in changes {
-                    if let Some(v) = change.value {
-                        // insert's keyed collection replaces a matching identity; materialize first
-                        // so the existing row and its update participate in normal persistence.
-                        db.try_get::<Bookmark>(change.id.clone())?;
-                        db.insert(Bookmark {
-                            id: change.id.clone(),
-                            url: v.url,
-                            title: v.title,
-                        });
-                    } else {
-                        db.delete::<Bookmark>(change.id.clone())?;
-                    }
-                    db.try_with_connection(|c| {
-                        c.execute(
-                            "INSERT OR IGNORE INTO _day_sync_dirty(object) VALUES(?)",
-                            &[text(change.id)],
-                        )?;
-                        Ok(())
-                    })?;
+                    stage_change(db, change)?;
                 }
                 Ok(())
             })
@@ -405,6 +439,51 @@ impl Replica {
         (self.probe)(Checkpoint::LocalCommitted)?;
         Ok(())
     }
+    /// Read one object's surviving candidates supported by this application revision.
+    /// # Errors
+    /// Returns a storage error if the local query fails.
+    pub async fn candidates(&self, id: String) -> Result<Vec<Candidate>, Error> {
+        let revision = self.application.as_ref().map_or(1, |app| app.revision());
+        Ok(self
+            .db
+            .read(move |db| db.try_with_connection(|c| object_candidates(c, &id, revision)))
+            .await?)
+    }
+    /// Commit a user's choice only while the exact versions shown are still current.
+    /// Returns false when a peer superseded them while the chooser was visible.
+    /// # Errors
+    /// Returns an error for an invalid index, pending app edits or a failed transaction.
+    pub async fn choose_candidate(
+        &self,
+        shown: Vec<Candidate>,
+        index: usize,
+    ) -> Result<bool, Error> {
+        let chosen = shown.get(index).ok_or(Error::InvalidWire)?.clone();
+        let app = self.application.clone();
+        Ok(self
+            .db
+            .write(move |db| {
+                let current = db.try_with_connection(|c| {
+                    if let Some(app) = &app {
+                        app.before_import(c)?;
+                    }
+                    object_candidates(c, &chosen.id, app.as_ref().map_or(1, |a| a.revision()))
+                })?;
+                if shown != current {
+                    return Ok(false);
+                }
+                stage_change(
+                    db,
+                    Change {
+                        id: chosen.id,
+                        value: chosen.value,
+                    },
+                )?;
+                Ok(true)
+            })
+            .await?)
+    }
+
     /// The replica's current state.
     ///
     /// # Errors
@@ -438,21 +517,7 @@ impl Replica {
                         &[],
                     )?
                     .into_iter()
-                    .map(|r| {
-                        Ok(Candidate {
-                            id: r[0].as_text()?.into(),
-                            actor: r[1].as_text()?.into(),
-                            sequence: number(&r[2])?,
-                            value: if r[3] == Value::Null {
-                                None
-                            } else {
-                                Some(
-                                    serde_json::from_slice(r[3].as_blob()?)
-                                        .map_err(|_| error("sync.invalid_candidate"))?,
-                                )
-                            },
-                        })
-                    })
+                    .map(|r| decode_candidate(&r))
                     .collect::<Result<_, DbError>>()?;
 
                     let counts = rows(

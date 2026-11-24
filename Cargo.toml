@@ -13,10 +13,10 @@ publish = false
 
 [workspace.dependencies]
 day-sync = { path = "crates/day-sync", version = "0.*" }
-# Persistence and the WebDAV transport resolve from crates.io.
+# Persistence resolves from crates.io. The transport follows the matching development API.
 # `day patch --local ../day --local ../day-persistence --local ../day-webdav` builds against checkouts.
 day-persistence = { version = "0.*", default-features = false, features = ["driver-rusqlite", "bundled"] }
-day-webdav = "0.*"
+day-webdav = { version = "0.*", git = "https://github.com/daybrite/day-webdav.git" }
 day-model = "0.*"
 day-reactive = "0.*"
 serde = { version = "1", features = ["derive"] }

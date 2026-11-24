@@ -56,12 +56,15 @@ fresh v5 stores; there is no automatic migration.
   backup, and restoring an old database requires a fresh device identity.
 - Device counts and state sizes have limits. Safe cleanup needs temporary room for a complete
   replacement; deletion markers and concurrent versions still occupy space.
-- The current adapter uses whole, bookmark-shaped records. Field-level collaborative editing,
-  attachments, partial sync, and browser execution are outside this prototype's scope.
+- Application profiles can use typed records with an independent key per field group. The v5
+  envelope retains its bounded two-string encoding. Media transfers use separate immutable
+  objects. The native replica syncs the complete catalog and supports selective file downloads.
+  Browser execution is outside this prototype's scope.
 
 ## Read more and try it
 
 - [How synchronization works](docs/synchronization.md), with illustrated scenarios.
+- [Application records and media libraries](docs/application-libraries.md).
 - [Protocol and integration reference](docs/protocol-reference.md), including limits and recovery.
 - [Physical-device fault lab](lab/README.md), with a disposable server, independent history oracle,
   and [recorded Pixel/iPhone qualification results](lab/RESULTS-2026-11-23.md).

@@ -31,6 +31,13 @@ pub enum Created {
     Exists,
 }
 
+/// A content read, optionally reusing a previously verified strong validator at this exact URL.
+pub enum ObjectRead {
+    Bytes(Vec<u8>, Option<String>),
+    Unchanged,
+    Absent,
+}
+
 /// Where a space's objects live. `directory` is a path of segments below the store's root;
 /// `name` is one object inside it. Segments and names never contain path separators.
 ///
@@ -53,6 +60,20 @@ pub trait Store: Send + Sync {
         directory: &'a [String],
         name: &'a str,
     ) -> StoreFuture<'a, Option<Vec<u8>>>;
+    /// Conditional asset read. Stores without strong validators use a full verified read.
+    fn read_object<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        _validator: Option<&'a str>,
+    ) -> StoreFuture<'a, ObjectRead> {
+        Box::pin(async move {
+            Ok(self
+                .get(directory, name)
+                .await?
+                .map_or(ObjectRead::Absent, |bytes| ObjectRead::Bytes(bytes, None)))
+        })
+    }
     /// Write the object, replacing any object of that name.
     fn put<'a>(
         &'a self,

@@ -46,13 +46,14 @@ fn is_first_revision(n: &u32) -> bool {
     *n == 1
 }
 pub fn digest(bytes: &[u8]) -> String {
+    hex_digest(&Sha256::digest(bytes))
+}
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::new(), |mut out, b| {
-            let _ = write!(out, "{b:02x}");
-            out
-        })
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 pub(crate) fn valid_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|u| !u.is_nil() && u.hyphenated().to_string() == id)

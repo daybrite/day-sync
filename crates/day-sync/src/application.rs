@@ -29,6 +29,27 @@ pub trait Application: Send + Sync + 'static {
         connection: &mut dyn SqliteConnection,
         changes: &[RowChange],
     ) -> Result<Vec<Change>, DbError>;
+    /// Check for app edits captured by a durable outbox on another local connection.
+    /// Runs in the import transaction before advancing causal history. An adapter with
+    /// pending edits must defer import until a local transaction journals those edits.
+    /// # Errors
+    /// An error rolls the import back.
+    fn before_import(&self, _connection: &mut dyn SqliteConnection) -> Result<(), DbError> {
+        Ok(())
+    }
+    /// Ensure all local attachment work is published before freezing its metadata epoch.
+    /// # Errors
+    /// Return an error while any local work still needs this writer.
+    fn before_freeze(&self, c: &mut dyn SqliteConnection) -> Result<(), DbError> {
+        self.before_import(c)
+    }
+    /// Enumerate every attachment reachable from one surviving candidate. Opt in explicitly
+    /// when using the media-aware checkpoint collector. Unrecognized values must fail closed.
+    /// # Errors
+    /// Returns an error when the application does not support asset-aware handoff.
+    fn asset_references(&self, _change: &Change) -> Result<Vec<crate::assets::AssetRef>, DbError> {
+        Err(DbError::driver("sync.unsupported_asset_handoff"))
+    }
     /// The model tables `project` and `capture` write by SQL, so only their resident rows are
     /// re-read after a local commit. `None` re-reads every table.
     fn projected_tables(&self) -> Option<&'static [&'static str]> {

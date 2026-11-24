@@ -24,6 +24,15 @@ impl WebDavStore {
     pub fn new(client: Client) -> Self {
         Self { client }
     }
+    /// Authenticate and exercise the conditional writes required for synchronization.
+    /// # Errors
+    /// Reports authentication, permissions and protocol failures as structured store errors.
+    pub async fn check_writable_collection(&self) -> Result<(), StoreError> {
+        self.client
+            .check_writable_collection()
+            .await
+            .map_err(convert)
+    }
     /// The client, for requests outside the sync protocol such as a connectivity probe.
     pub fn client(&self) -> &Client {
         &self.client
@@ -152,6 +161,43 @@ impl Store for WebDavStore {
                 Err(DavError::Status { status: 404, .. }) => Ok(None),
                 Err(e) => Err(convert(e)),
             }
+        })
+    }
+    fn read_object<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        validator: Option<&'a str>,
+    ) -> StoreFuture<'a, day_sync::store::ObjectRead> {
+        use day_sync::store::ObjectRead;
+        Box::pin(async move {
+            let path = path(directory, Some(name))?;
+            let tag = validator
+                .and_then(|v| webdav::EntityTag::parse(v).ok())
+                .filter(|v| !v.is_weak());
+            let result = self.client.get(&path, tag.as_ref()).await;
+            let response = match result {
+                Err(DavError::Status { status: 404, .. }) => return Ok(ObjectRead::Absent),
+                other => other.map_err(convert)?,
+            };
+            // If-None-Match permits a weak comparison. Only a matching strong tag proves
+            // that the byte representation whose digest we checked is still current.
+            let response = if response.status == 304 {
+                if tag.is_some()
+                    && response.header("ETag") == tag.as_ref().map(webdav::EntityTag::as_str)
+                {
+                    return Ok(ObjectRead::Unchanged);
+                }
+                self.client.get(&path, None).await.map_err(convert)?
+            } else {
+                response
+            };
+            let validator = response
+                .header("ETag")
+                .and_then(|s| webdav::EntityTag::parse(s).ok())
+                .filter(|t| !t.is_weak())
+                .map(|t| t.as_str().to_owned());
+            Ok(ObjectRead::Bytes(response.body, validator))
         })
     }
     fn put<'a>(
