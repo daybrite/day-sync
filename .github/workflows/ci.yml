@@ -8,13 +8,13 @@ name: ci
 # The second set names that one crate: the provider changes nothing in the engine, and a second
 # pass over the engine's suite (durable transactions, several times slower on the Windows
 # runner) overran the workflow's thirty-minute test step. The configured physical-device lab
-# is separate from the shared demo/website legs. The crate is `publish = false`, so nothing
-# goes to crates.io.
+# is separate from the shared demo/website legs. Version tags publish day-sync to crates.io.
 # A push builds against the head of day's main branch and of every other Day repository's
 # default branch; the nightly run builds against the newest releases.
 on:
   push:
     branches: ["**"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -40,8 +40,7 @@ permissions:
 jobs:
   ci:
     uses: daybrite/actions/.github/workflows/daylib.yml@v1
-    # The grants the shared workflow declares for its jobs. The demo and publish legs that would
-    # use them are skipped here: no Day.toml, `publish = false`.
+    # The shared workflow uses the release environment and OIDC for crates.io.
     permissions:
       contents: write
       pages: write
@@ -50,7 +49,6 @@ jobs:
     with:
       day-main: ${{ inputs.day-main || false }}
       feature-sets: -p day-sync-webdav --features day-sync-webdav/reqwest
-      publish: false
 
   stress:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
