@@ -6,7 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = ["crates-io"]
+readme = "../../README.md"
 
 [package.metadata.day]
 compat = "0.*"

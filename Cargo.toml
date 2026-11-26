@@ -3,20 +3,19 @@ resolver = "3"
 members = ["crates/day-sync", "crates/day-sync-webdav", "crates/day-sync-filesystem"]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 rust-version = "1.100"
 repository = "https://github.com/daybrite/day-sync"
 license = "MPL-2.0"
-# Storage adapters inherit this default. The day-sync engine opts in to crates.io.
+# Only members consumed from crates.io opt in to publication.
 publish = false
 
 [workspace.dependencies]
 day-sync = { path = "crates/day-sync", version = "0.*" }
-# Persistence resolves from crates.io. The transport follows the matching development API.
 # `day patch --local ../day --local ../day-persistence --local ../day-webdav` builds against checkouts.
 day-persistence = { version = "0.*", default-features = false, features = ["driver-rusqlite", "bundled"] }
-day-webdav = { version = "0.*", git = "https://github.com/daybrite/day-webdav.git" }
+day-webdav = "0.*"
 day-model = "0.*"
 day-reactive = "0.*"
 serde = { version = "1", features = ["derive"] }
