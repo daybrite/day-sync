@@ -86,3 +86,16 @@ cargo run -p day-sync --example compaction
 ```
 
 Licensed under [MPL-2.0](LICENSE).
+
+## Independent document collections
+
+The `documents` module also runs in a raw-Wasm browser. It exchanges individually
+mergeable documents with one or more stores through strong validators and conditional
+updates. Each application defines its schema, conflict rules, deletion markers and
+durable local merge. The WebDAV adapter exposes verified versions and the strong
+ETags available in a collection listing. A response lost after a write is reconciled
+by reading the object. Concurrent writers retry against the new version.
+
+Day Plan uses this exchange for its per-item causal registers. Its document
+collections have their own versioned application directory. The transactional v5
+replica and its snapshots still require the native SQLite worker.

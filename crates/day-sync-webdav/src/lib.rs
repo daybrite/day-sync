@@ -8,14 +8,15 @@
 //! that omits the collection itself or reports any member with a status other than 200 is
 //! refused as incomplete rather than read as a shorter listing. Day's native HTTP stack
 //! carries the requests by default. The `reqwest` feature enables that provider as an option.
-#![cfg(not(target_arch = "wasm32"))]
 
 pub use day_sync;
 pub use day_webdav as webdav;
 
+#[cfg(not(target_arch = "wasm32"))]
 use day_sync::store::FileCreation;
 use day_sync::{Created, Store, StoreError, StoreErrorKind, StoreFuture};
 use day_webdav::{Client, Condition, Depth, Error as DavError, ResourcePath};
+#[cfg(not(target_arch = "wasm32"))]
 use sha2::{Digest, Sha256};
 
 /// A [`Client`] bound to one account and base collection, serving as a store.
@@ -131,12 +132,14 @@ fn convert(error: DavError) -> StoreError {
 }
 
 /// Compare the temporary remote resource to the immutable source before exposing its name.
+#[cfg(not(target_arch = "wasm32"))]
 struct CompareSource {
     source: std::io::BufReader<std::fs::File>,
     mismatch: bool,
     hash: Sha256,
     bytes: u64,
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl std::io::Write for CompareSource {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         use std::io::BufRead;
@@ -190,42 +193,14 @@ impl Store for WebDavStore {
         })
     }
     fn list<'a>(&'a self, directory: &'a [String]) -> StoreFuture<'a, Vec<String>> {
+        use day_sync::documents::DocumentStore;
         Box::pin(async move {
-            let mapped = self.directory(directory);
-            let directory = mapped.as_ref();
-            let collection = path(directory, None)?;
-            let listing = self
-                .client
-                .propfind(&collection, Depth::One)
-                .await
-                .map_err(convert)?;
-            let root = self.client.endpoint().url(&collection);
-            if !listing
-                .resources
-                .iter()
-                .any(|r| r.href == root && r.is_collection())
-                || listing
-                    .resources
-                    .iter()
-                    .any(|r| r.status.is_some_and(|s| s != 200))
-            {
-                return Err(StoreError::new(StoreErrorKind::IncompleteListing));
-            }
-            listing
-                .resources
-                .iter()
-                .filter(|r| r.href != root)
-                .map(|r| {
-                    let child = r
-                        .href
-                        .strip_prefix(&root)
-                        .ok_or_else(|| StoreError::new(StoreErrorKind::Protocol))?;
-                    percent_encoding::percent_decode_str(child)
-                        .decode_utf8()
-                        .map(std::borrow::Cow::into_owned)
-                        .map_err(|_| StoreError::new(StoreErrorKind::Protocol))
-                })
-                .collect()
+            Ok(self
+                .index(directory)
+                .await?
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect())
         })
     }
     fn get<'a>(
@@ -322,6 +297,7 @@ impl Store for WebDavStore {
             }
         })
     }
+    #[cfg(not(target_arch = "wasm32"))]
     fn create_file<'a>(
         &'a self,
         directory: &'a [String],
@@ -335,6 +311,7 @@ impl Store for WebDavStore {
                 .map(Into::into)
         })
     }
+    #[cfg(not(target_arch = "wasm32"))]
     fn create_file_with_progress<'a>(
         &'a self,
         directory: &'a [String],
@@ -411,6 +388,7 @@ impl Store for WebDavStore {
             publication
         })
     }
+    #[cfg(not(target_arch = "wasm32"))]
     fn read_file<'a>(
         &'a self,
         directory: &'a [String],
@@ -444,6 +422,102 @@ impl Store for WebDavStore {
                 Ok(_) => Ok(true),
                 Err(DavError::Status { status: 404, .. }) => Ok(false),
                 Err(e) => Err(convert(e)),
+            }
+        })
+    }
+}
+
+impl day_sync::documents::DocumentStore for WebDavStore {
+    fn index<'a>(
+        &'a self,
+        directory: &'a [String],
+    ) -> StoreFuture<'a, Vec<(String, Option<String>)>> {
+        Box::pin(async move {
+            let mapped = self.directory(directory);
+            let directory = mapped.as_ref();
+            let collection = path(directory, None)?;
+            let listing = self
+                .client
+                .propfind(&collection, Depth::One)
+                .await
+                .map_err(convert)?;
+            let root = self.client.endpoint().url(&collection);
+            if !listing
+                .resources
+                .iter()
+                .any(|r| r.href == root && r.is_collection())
+                || listing
+                    .resources
+                    .iter()
+                    .any(|r| r.status.is_some_and(|s| s != 200))
+            {
+                return Err(StoreError::new(StoreErrorKind::IncompleteListing));
+            }
+            listing
+                .resources
+                .iter()
+                .filter(|r| r.href != root)
+                .map(|r| {
+                    let child = r
+                        .href
+                        .strip_prefix(&root)
+                        .ok_or_else(|| StoreError::new(StoreErrorKind::Protocol))?;
+                    percent_encoding::percent_decode_str(child)
+                        .decode_utf8()
+                        .map(|name| {
+                            (
+                                name.into_owned(),
+                                r.etag()
+                                    .and_then(|s| webdav::EntityTag::parse(s).ok())
+                                    .filter(|t| !t.is_weak())
+                                    .map(|t| t.as_str().to_owned()),
+                            )
+                        })
+                        .map_err(|_| StoreError::new(StoreErrorKind::Protocol))
+                })
+                .collect()
+        })
+    }
+
+    fn version<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+    ) -> StoreFuture<'a, Option<day_sync::documents::Version>> {
+        Box::pin(async move {
+            let path = path(&self.directory(directory), Some(name))?;
+            let response = match self.client.get(&path, None).await {
+                Err(DavError::Status { status: 404, .. }) => return Ok(None),
+                result => result.map_err(convert)?,
+            };
+            let tag = response
+                .header("ETag")
+                .and_then(|s| webdav::EntityTag::parse(s).ok())
+                .filter(|t| !t.is_weak())
+                .ok_or_else(|| StoreError::new(StoreErrorKind::Protocol))?;
+            Ok(Some(day_sync::documents::Version {
+                bytes: response.body,
+                validator: tag.as_str().to_owned(),
+            }))
+        })
+    }
+
+    fn replace<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        expected: Option<&'a str>,
+        bytes: Vec<u8>,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let path = path(&self.directory(directory), Some(name))?;
+            let condition = match expected {
+                None => Condition::CreateOnly,
+                Some(tag) => Condition::IfMatch(webdav::EntityTag::parse(tag).map_err(convert)?),
+            };
+            match self.client.put(&path, bytes, condition).await {
+                Err(DavError::Status { status: 412, .. }) => Ok(false),
+                other => other.map(|_| true).map_err(convert),
             }
         })
     }

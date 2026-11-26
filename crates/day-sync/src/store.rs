@@ -287,7 +287,15 @@ impl Default for MemoryStore {
 impl MemoryStore {
     pub fn new() -> Self {
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
             id: uuid::Uuid::new_v4().to_string(),
+            #[cfg(target_arch = "wasm32")]
+            id: {
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    .to_string()
+            },
             inner: Arc::default(),
         }
     }

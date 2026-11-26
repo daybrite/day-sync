@@ -16,11 +16,12 @@ default = []
 # Reach the server through the reqwest provider instead of Day's native HTTP stack.
 reqwest = ["day-webdav/reqwest"]
 
-# Empty on the web target, like the engine it serves.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[dependencies]
 day-sync = { workspace = true }
 day-webdav = { workspace = true }
 percent-encoding = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 sha2 = { workspace = true }
 uuid = { workspace = true }
 
