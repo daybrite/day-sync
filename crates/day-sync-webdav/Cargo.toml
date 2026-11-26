@@ -20,6 +20,9 @@ reqwest = ["day-webdav/reqwest"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 day-sync = { workspace = true }
 day-webdav = { workspace = true }
+percent-encoding = "2"
+sha2 = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 day-persistence = { workspace = true }
@@ -28,8 +31,6 @@ futures-lite = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-uuid = { workspace = true }
 
 [lints]
 workspace = true

@@ -28,6 +28,7 @@ enum Fault {
     LostAck,
     ContendedControl,
     PartialPut,
+    CorruptPut,
     FalseSuccess,
     CorruptRead,
     TruncatedRead,
@@ -43,6 +44,38 @@ struct Store {
     collections: Vec<String>,
     mkdir_status: Option<u16>,
     delete_status: Option<u16>,
+    lose_move_ack: bool,
+    rival_at_move: Option<Vec<u8>>,
+}
+fn move_fixture_file(
+    state: &mut Store,
+    path: &str,
+    headers: &[(String, String)],
+) -> Result<Reply, http::HttpError> {
+    let destination = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("Destination"))
+        .unwrap()
+        .1
+        .clone();
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("Overwrite") && v == "F")
+    );
+    if let Some(other) = state.rival_at_move.take() {
+        state.files.insert(destination.clone(), other);
+    }
+    if state.files.contains_key(&destination) {
+        return Ok(Reply::new(412, vec![]));
+    }
+    let bytes = state.files.remove(path).unwrap();
+    state.files.insert(destination, bytes);
+    if std::mem::take(&mut state.lose_move_ack) {
+        Err(http::HttpError::Connect)
+    } else {
+        Ok(Reply::new(201, vec![]))
+    }
 }
 fn setup() -> (WebDavStore, Arc<Mutex<Store>>, Simulation) {
     let store = Arc::new(Mutex::new(Store::default()));
@@ -53,11 +86,19 @@ fn setup() -> (WebDavStore, Arc<Mutex<Store>>, Simulation) {
         match request.method.as_str(){
             "MKCOL"=>{let exists=s.collections.contains(&path);if !exists{s.collections.push(path);}Ok(Reply::new(if exists{s.mkdir_status.unwrap_or(405)}else{201},vec![]))},
             "PUT"=>{
-                let bytes=match request.body {PreparedBody::Bytes(b)=>b.as_ref().clone(),_=>panic!("bounded bytes required")};
+                let bytes = match request.body {
+                    PreparedBody::Bytes(b) => b.as_ref().clone(),
+                    PreparedBody::File { path, .. } => std::fs::read(path).unwrap(),
+                    _ => panic!("test expects a file or bytes"),
+                };
                 if !path.contains("/tx-") && !s.fault_controls{s.files.insert(path,bytes);return Ok(Reply::new(201,vec![]));}
                 s.puts+=1;let fault=std::mem::take(&mut s.fault);
                 match fault {
                     Fault::Status(code)=>Ok(Reply::new(code,vec![]).header("Retry-After","120")),
+                    Fault::CorruptPut => {
+                        s.files.insert(path, vec![0; bytes.len()]);
+                        Ok(Reply::new(201, vec![]))
+                    }
                     Fault::FalseSuccess=>Ok(Reply::new(201,vec![])),
                     Fault::PartialPut=>{s.files.insert(path,bytes[..bytes.len()/2].to_vec());Err(http::HttpError::Connect)},
                     Fault::LostAck=>{s.files.insert(path,bytes);Err(http::HttpError::Connect)},
@@ -65,6 +106,7 @@ fn setup() -> (WebDavStore, Arc<Mutex<Store>>, Simulation) {
                     _=>{s.files.insert(path,bytes);s.fault=fault;Ok(Reply::new(201,vec![]))}
                 }
             },
+            "MOVE" => move_fixture_file(&mut s, &path, &request.headers),
             "DELETE"=>{if let Some(code)=s.delete_status.take(){Ok(Reply::new(code,vec![]).header("Retry-After","120"))}else{s.files.remove(&path);Ok(Reply::new(204,vec![]))}},
             "GET"=>{
                 let Some(bytes)=s.files.get(&path).cloned() else{return Ok(Reply::new(404,vec![]));};
@@ -519,4 +561,146 @@ fn response_bound_is_a_capacity_error_not_a_transient_outage() {
     assert_eq!(error.kind, StoreErrorKind::Limit);
     assert!(std::error::Error::source(&error).is_some());
     assert_eq!(simulation.requests().len(), 1);
+}
+
+#[test]
+fn named_publication_reconciles_failures_and_skips_existing_uploads() {
+    use day_sync::Store as _;
+    use std::io::Write as _;
+    struct Full;
+    impl std::io::Write for Full {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::StorageFull.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    block_on(async {
+        let (store, state, sim) = setup();
+        let store = store.with_private_directory(".sync", "books").unwrap();
+        let file = assets::AssetFile {
+            directory: "books".into(),
+            name: "Édition #1 + 100%.epub".into(),
+        };
+        let directory = [file.directory.clone()];
+        let bytes = b"synthetic publication";
+        let digest = "7e868dd739f0c090d5973a555fa6a47d8c427bd4ae4983fcd4e8d1e9cc5ae4a9";
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(bytes).unwrap();
+        state.lock().unwrap().fault_controls = true;
+        for fault in [Fault::PartialPut, Fault::CorruptPut] {
+            state.lock().unwrap().fault = fault;
+            assert!(
+                assets::upload_file(&store, file.clone(), source.path(), digest, |_| {})
+                    .await
+                    .is_err()
+            );
+            assert!(state.lock().unwrap().files.is_empty());
+        }
+        // The server completes a staging PUT and the final MOVE but loses both replies.
+        {
+            let mut remote = state.lock().unwrap();
+            remote.fault = Fault::LostAck;
+            remote.lose_move_ack = true;
+        }
+        let mut sent = Vec::new();
+        assets::upload_file(&store, file.clone(), source.path(), digest, |n| {
+            sent.push(n);
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(sent.first(), Some(&0));
+        assert_eq!(sent.last(), Some(&(bytes.len() as u64)));
+        assert!(sent.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(
+            store.list(&directory).await.unwrap(),
+            std::slice::from_ref(&file.name)
+        );
+        let requests = sim.requests();
+        assert!(
+            requests
+                .iter()
+                .filter(|r| r.method == "PUT")
+                .all(|r| r.url.contains("/.sync/day-transfers-v1/"))
+        );
+        let before = requests.len();
+        assets::upload_file(&store, file.clone(), source.path(), digest, |_| {})
+            .await
+            .unwrap()
+            .unwrap();
+        let mut other = tempfile::NamedTempFile::new().unwrap();
+        other.write_all(b"x").unwrap();
+        let hash = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881";
+        assert!(
+            assets::upload_file(&store, file.clone(), other.path(), hash, |_| {})
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let requests = sim.requests();
+        assert!(
+            requests[before..]
+                .iter()
+                .all(|r| r.method == "GET" && r.url.contains("/books/"))
+        );
+        assert_eq!(
+            store.get(&directory, &file.name).await.unwrap().unwrap(),
+            bytes
+        );
+        state.lock().unwrap().rival_at_move = Some(b"concurrent edition".to_vec());
+        let rival = assets::AssetFile {
+            directory: file.directory.clone(),
+            name: "Concurrent.epub".into(),
+        };
+        assert!(
+            assets::upload_file(&store, rival.clone(), source.path(), digest, |_| {})
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store.get(&directory, &rival.name).await.unwrap().unwrap(),
+            b"concurrent edition"
+        );
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .files
+                .keys()
+                .all(|p| !p.contains("/day-transfers-v1/"))
+        );
+        let private = ["records".to_owned()];
+        store.ensure_directory(&private).await.unwrap();
+        store.put(&private, "one", vec![1]).await.unwrap();
+        assert_eq!(
+            store.create(&private, "two", vec![2]).await.unwrap(),
+            Created::Created
+        );
+        assert_eq!(store.get(&private, "one").await.unwrap(), Some(vec![1]));
+        assert!(matches!(
+            store.read_object(&private, "two", None).await.unwrap(),
+            day_sync::store::ObjectRead::Bytes(_, _)
+        ));
+        let mut names = store.list(&private).await.unwrap();
+        names.sort();
+        assert_eq!(names, ["one", "two"]);
+        assert!(store.delete(&private, "one").await.unwrap());
+        assert!(
+            sim.requests()
+                .iter()
+                .filter(|r| r.url.contains("/records/"))
+                .all(|r| r.url.contains("/.sync/records/"))
+        );
+        assert_eq!(
+            store
+                .read_file(&directory, &file.name, &mut Full, 1024)
+                .await
+                .unwrap_err()
+                .kind,
+            StoreErrorKind::InsufficientStorage
+        );
+    });
 }

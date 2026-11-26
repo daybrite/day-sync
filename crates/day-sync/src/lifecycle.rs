@@ -817,9 +817,10 @@ impl Replica {
             .await?;
         Ok(())
     }
-    /// Back up a retired media pool and copy all surviving candidates' assets to the new
-    /// space before reclaiming at most `limit` old objects. Supply an independent backup
-    /// store, for example an external filesystem. Safe to retry after any interrupted step.
+    /// Back up a retired media pool, copy surviving chunks into the new space, and reclaim
+    /// at most `limit` old objects. Named files stay in their shared collection and are
+    /// backed up through `staging_directory`, which must be writable by the caller. Supply
+    /// an independent backup store. Safe to retry after any interrupted step.
     /// # Errors
     /// Refuses an active or mismatched epoch, an unverified checkpoint, a shared backup
     /// endpoint, an unsupported profile, or missing/corrupt referenced data.
@@ -829,6 +830,7 @@ impl Replica {
         backup: &dyn Store,
         pin: &CheckpointPin,
         limit: usize,
+        staging_directory: &std::path::Path,
     ) -> Result<usize, Error> {
         if store.endpoint() == backup.endpoint() || pin.source != self.space_descriptor() {
             return Err(Error::WrongEndpoint);
@@ -878,7 +880,28 @@ impl Replica {
         Package::fetch(backup, pin).await?;
         let inventory = crate::assets::backup_pool(store, backup, self.space()).await?;
         for asset in refs {
-            crate::assets::copy(backup, self.space(), store, destination.space(), &asset).await?;
+            if asset.file.is_some() {
+                // Named files are shared across epochs and are outside the chunk-pool inventory.
+                crate::assets::copy(
+                    store,
+                    self.space(),
+                    backup,
+                    self.space(),
+                    &asset,
+                    staging_directory,
+                )
+                .await?;
+            } else {
+                crate::assets::copy(
+                    backup,
+                    self.space(),
+                    store,
+                    destination.space(),
+                    &asset,
+                    staging_directory,
+                )
+                .await?;
+            }
         }
         let mut count = 0;
         for (dir, name) in inventory.into_iter().take(limit) {

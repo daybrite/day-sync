@@ -15,6 +15,7 @@ compat = "0.*"
 # The engine sits on rusqlite, so the crate is empty on the web target (`lib.rs` is
 # `#![cfg(not(target_arch = "wasm32"))]`) and takes nothing with it there.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tempfile = { workspace = true }
 day-model = { workspace = true }
 day-persistence = { workspace = true }
 serde = { workspace = true }
@@ -24,7 +25,6 @@ uuid = { workspace = true }
 rusqlite = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-tempfile = { workspace = true }
 futures-lite = { workspace = true }
 day-reactive = { workspace = true }
 

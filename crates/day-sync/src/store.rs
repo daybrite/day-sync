@@ -31,6 +31,31 @@ pub enum Created {
     Exists,
 }
 
+/// Result of publishing a local file. A backend that verified its remote staging file
+/// before an acknowledged no-overwrite rename can return that digest to avoid a second GET.
+#[derive(Debug)]
+pub enum FileCreation {
+    Created,
+    Verified { sha256: [u8; 32], bytes: u64 },
+    Exists,
+}
+impl From<FileCreation> for Created {
+    fn from(file: FileCreation) -> Self {
+        match file {
+            FileCreation::Exists => Self::Exists,
+            FileCreation::Created | FileCreation::Verified { .. } => Self::Created,
+        }
+    }
+}
+impl From<Created> for FileCreation {
+    fn from(outcome: Created) -> Self {
+        match outcome {
+            Created::Created => Self::Created,
+            Created::Exists => Self::Exists,
+        }
+    }
+}
+
 /// A content read, optionally reusing a previously verified strong validator at this exact URL.
 pub enum ObjectRead {
     Bytes(Vec<u8>, Option<String>),
@@ -88,6 +113,66 @@ pub trait Store: Send + Sync {
         name: &'a str,
         bytes: Vec<u8>,
     ) -> StoreFuture<'a, Created>;
+    /// Publish a whole file without replacing an existing object. The default supports small
+    /// files on buffered stores. Disk and DAV stores support large files through their file-transfer APIs.
+    fn create_file<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        file: &'a std::path::Path,
+        limit: u64,
+    ) -> StoreFuture<'a, Created> {
+        Box::pin(async move {
+            use std::io::Read;
+            let limit = limit.min(8 * 1024 * 1024);
+            let mut data = Vec::new();
+            std::fs::File::open(file)
+                .and_then(|f| f.take(limit + 1).read_to_end(&mut data))
+                .map_err(StoreError::local_io)?;
+            if data.len() as u64 > limit {
+                return Err(StoreError::new(StoreErrorKind::Limit));
+            }
+            self.create(directory, name, data).await
+        })
+    }
+    /// Create a file with cumulative transfer progress on the polling task. Backends
+    /// without intermediate events report the completed size after a successful write.
+    fn create_file_with_progress<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        file: &'a std::path::Path,
+        limit: u64,
+        progress: &'a mut dyn FnMut(u64),
+    ) -> StoreFuture<'a, FileCreation> {
+        Box::pin(async move {
+            let size = file.metadata().map_err(StoreError::local_io)?.len();
+            let outcome = self.create_file(directory, name, file, limit).await?;
+            if outcome == Created::Created {
+                progress(size);
+            }
+            Ok(outcome.into())
+        })
+    }
+    /// Write at most `limit` bytes to the caller's staging sink. Returns false for a missing file.
+    fn read_file<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        sink: &'a mut dyn std::io::Write,
+        limit: u64,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let Some(data) = self.get(directory, name).await? else {
+                return Ok(false);
+            };
+            if data.len() as u64 > limit {
+                return Err(StoreError::new(StoreErrorKind::Limit));
+            }
+            sink.write_all(&data).map_err(StoreError::local_io)?;
+            Ok(true)
+        })
+    }
     /// Remove the object. `Ok(true)` when it existed, `Ok(false)` when there was nothing to
     /// remove; absence is never an error.
     fn delete<'a>(&'a self, directory: &'a [String], name: &'a str) -> StoreFuture<'a, bool>;
@@ -129,6 +214,16 @@ pub struct StoreError {
     source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
 }
 impl StoreError {
+    /// Classify local staging and destination I/O independently of the remote transport.
+    pub fn local_io(error: std::io::Error) -> Self {
+        let kind = match error.kind() {
+            std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded => {
+                StoreErrorKind::InsufficientStorage
+            }
+            _ => StoreErrorKind::Other,
+        };
+        Self::with_source(kind, error)
+    }
     pub fn new(kind: StoreErrorKind) -> Self {
         Self {
             kind,

@@ -53,6 +53,66 @@ async fn converge(replicas: &[Replica], store: &dyn Store) {
 }
 
 #[test]
+fn whole_files_preserve_occupied_names_and_obey_transfer_limits() {
+    block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilesystemStore::open(dir.path().join("share")).unwrap();
+        let directory = ["books".into()];
+        let name = "Fixture edition.epub";
+        let source = dir.path().join("source");
+        std::fs::write(&source, b"synthetic bytes").unwrap();
+        store.ensure_directory(&directory).await.unwrap();
+        assert_eq!(
+            store
+                .create_file(&directory, name, &source, 1)
+                .await
+                .unwrap_err()
+                .kind,
+            StoreErrorKind::Limit
+        );
+        assert_eq!(store.list(&directory).await.unwrap(), Vec::<String>::new());
+        assert_eq!(
+            store
+                .create_file(&directory, name, &source, 15)
+                .await
+                .unwrap(),
+            Created::Created
+        );
+        std::fs::write(&source, b"other content").unwrap();
+        assert_eq!(
+            store
+                .create_file(&directory, name, &source, 15)
+                .await
+                .unwrap(),
+            Created::Exists
+        );
+        let mut received = Vec::new();
+        assert_eq!(
+            store
+                .read_file(&directory, name, &mut received, 1)
+                .await
+                .unwrap_err()
+                .kind,
+            StoreErrorKind::Limit
+        );
+        assert_eq!(received, b"");
+        assert!(
+            store
+                .read_file(&directory, name, &mut received, 15)
+                .await
+                .unwrap()
+        );
+        assert_eq!(received, b"synthetic bytes");
+        assert!(
+            !store
+                .read_file(&directory, "absent", &mut received, 15)
+                .await
+                .unwrap()
+        );
+    });
+}
+
+#[test]
 fn store_semantics_on_a_directory() {
     block_on(async {
         let dir = tempfile::tempdir().unwrap();

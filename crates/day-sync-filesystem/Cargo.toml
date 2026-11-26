@@ -16,8 +16,8 @@ compat = "0.*"
 day-sync = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-futures-lite = { workspace = true }
 tempfile = { workspace = true }
+futures-lite = { workspace = true }
 uuid = { workspace = true }
 
 [lints]

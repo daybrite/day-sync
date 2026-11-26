@@ -61,6 +61,14 @@ fresh v5 stores; there is no automatic migration.
   objects. The native replica syncs the complete catalog and supports selective file downloads.
   Browser execution is outside this prototype's scope.
 
+## Attachment transfers
+
+`assets::upload_file` publishes a whole file under a browsable name and reports outgoing
+bytes on the polling task. A retry verifies an existing file before sending any bytes.
+`upload_with_progress` reports verified chunks for resumable chunk-pool transfers.
+`download_with_progress` reports received bytes for named files and verified chunks
+for chunked files. Await successful completion before using a file or saving its reference.
+
 ## Read more and try it
 
 - [How synchronization works](docs/synchronization.md), with illustrated scenarios.

@@ -8,11 +8,10 @@
 //! directory and renamed into place, so a reader never sees a partially written object under
 //! its final name. Create-only writes link the temporary file to the final name, which fails
 //! atomically when the name is taken; a file system without hard links falls back to a check
-//! and a rename, the one non-atomic step, and the engine's read-back covers it.
+//! and a rename under a directory lock shared by writers using this store.
 //!
-//! Calls block on `std::fs`; they are short, and Day's executor runs them on the task's
-//! thread. Names beginning with a dot are reserved for this store's temporary files and are
-//! neither listed nor accepted.
+//! File I/O runs synchronously on the polling thread. Schedule large transfers on a task
+//! suitable for blocking I/O. The store reserves dot-prefixed names for staging and locking.
 #![cfg(not(target_arch = "wasm32"))]
 
 pub use day_sync;
@@ -91,34 +90,74 @@ fn convert(error: io::Error) -> StoreError {
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
-/// Write `bytes` to a hidden temporary file beside `path`, flushed to disk.
-fn stage(path: &Path, bytes: &[u8]) -> Result<PathBuf, StoreError> {
+/// Stage a complete, flushed file in the destination directory. Cleanup is limited to
+/// the file this invocation successfully created.
+fn stage(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<(), StoreError>,
+) -> Result<PathBuf, StoreError> {
     let directory = path
         .parent()
         .ok_or_else(|| StoreError::new(StoreErrorKind::Invalid))?;
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| StoreError::new(StoreErrorKind::Invalid))?;
-    let temporary = directory.join(format!(
-        ".{name}.{}.{}.tmp",
-        std::process::id(),
-        TEMPORARY.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = (|| {
-        use io::Write;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()
-    })();
+    let (temporary, mut file) = loop {
+        let temporary = directory.join(format!(
+            ".day-sync-{}-{}.tmp",
+            std::process::id(),
+            TEMPORARY.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::File::create_new(&temporary) {
+            Ok(file) => break (temporary, file),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(convert(e)),
+        }
+    };
+    let written = write(&mut file).and_then(|()| file.sync_all().map_err(convert));
+    drop(file);
     if let Err(e) = written {
         let _ = fs::remove_file(&temporary);
-        return Err(convert(e));
+        return Err(e);
     }
     Ok(temporary)
+}
+
+// The persistent lock file keeps the same inode across writers. A terminated process
+// releases its OS lock. Only providers without hard links need this fallback.
+fn rename_if_absent(temporary: &Path, path: &Path) -> Result<Created, StoreError> {
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(temporary.with_file_name(".day-sync-create.lock"))
+        .map_err(convert)?;
+    lock.lock().map_err(convert)?;
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(Created::Exists),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => fs::rename(temporary, path)
+            .map(|()| Created::Created)
+            .map_err(convert),
+        Err(e) => Err(convert(e)),
+    }
+}
+
+fn create_staged(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<(), StoreError>,
+) -> Result<Created, StoreError> {
+    if path.try_exists().map_err(convert)? {
+        return Ok(Created::Exists);
+    }
+    let temporary = stage(path, write)?;
+    let result = match fs::hard_link(&temporary, path) {
+        Ok(()) => Ok(Created::Created),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(Created::Exists),
+        Err(_) => rename_if_absent(&temporary, path),
+    };
+    let _ = fs::remove_file(temporary);
+    if matches!(result, Ok(Created::Created)) {
+        sync_directory(path);
+    }
+    result
 }
 
 /// Make the directory entry durable where the platform offers it; a failure here is a
@@ -177,7 +216,9 @@ impl Store for FilesystemStore {
     ) -> StoreFuture<'a, ()> {
         Box::pin(async move {
             let path = self.resolve(directory, Some(name))?;
-            let temporary = stage(&path, &bytes)?;
+            let temporary = stage(&path, |file| {
+                io::Write::write_all(file, &bytes).map_err(convert)
+            })?;
             if let Err(e) = fs::rename(&temporary, &path) {
                 let _ = fs::remove_file(&temporary);
                 return Err(convert(e));
@@ -194,25 +235,79 @@ impl Store for FilesystemStore {
     ) -> StoreFuture<'a, Created> {
         Box::pin(async move {
             let path = self.resolve(directory, Some(name))?;
-            if path.exists() {
-                return Ok(Created::Exists);
-            }
-            let temporary = stage(&path, &bytes)?;
-            let outcome = match fs::hard_link(&temporary, &path) {
-                Ok(()) => Ok(Created::Created),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(Created::Exists),
-                // No hard links here (FAT, some SMB mounts): the check above is the best this
-                // file system offers, and the rename at least keeps the object whole.
-                Err(_) if !path.exists() => fs::rename(&temporary, &path)
-                    .map(|()| Created::Created)
-                    .map_err(convert),
-                Err(_) => Ok(Created::Exists),
+            create_staged(&path, |file| {
+                io::Write::write_all(file, &bytes).map_err(convert)
+            })
+        })
+    }
+    fn read_file<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        sink: &'a mut dyn io::Write,
+        limit: u64,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            use io::Read;
+            let path = self.resolve(directory, Some(name))?;
+            let mut file = match fs::File::open(path) {
+                Ok(f) => f,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(convert(e)),
             };
-            let _ = fs::remove_file(&temporary);
-            if outcome.is_ok() {
-                sync_directory(&path);
+            if file.metadata().map_err(convert)?.len() > limit {
+                return Err(StoreError::new(StoreErrorKind::Limit));
             }
-            outcome
+            io::copy(&mut (&mut file).take(limit), sink).map_err(convert)?;
+            let mut extra = [0];
+            if file.read(&mut extra).map_err(convert)? != 0 {
+                return Err(StoreError::new(StoreErrorKind::Limit));
+            }
+            Ok(true)
+        })
+    }
+    fn create_file<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        file: &'a Path,
+        limit: u64,
+    ) -> StoreFuture<'a, Created> {
+        Box::pin(async move {
+            self.create_file_with_progress(directory, name, file, limit, &mut |_| {})
+                .await
+                .map(Into::into)
+        })
+    }
+    fn create_file_with_progress<'a>(
+        &'a self,
+        directory: &'a [String],
+        name: &'a str,
+        file: &'a Path,
+        limit: u64,
+        progress: &'a mut dyn FnMut(u64),
+    ) -> StoreFuture<'a, day_sync::store::FileCreation> {
+        Box::pin(async move {
+            use io::{Read, Write};
+            let path = self.resolve(directory, Some(name))?;
+            create_staged(&path, |stage| {
+                let mut source = fs::File::open(file).map_err(convert)?;
+                let mut total = 0u64;
+                let mut buffer = vec![0; 64 * 1024];
+                loop {
+                    let count = source.read(&mut buffer).map_err(convert)?;
+                    if count == 0 {
+                        return Ok(());
+                    }
+                    total = total
+                        .checked_add(count as u64)
+                        .filter(|n| *n <= limit)
+                        .ok_or_else(|| StoreError::new(StoreErrorKind::Limit))?;
+                    stage.write_all(&buffer[..count]).map_err(convert)?;
+                    progress(total);
+                }
+            })
+            .map(Into::into)
         })
     }
     fn delete<'a>(&'a self, directory: &'a [String], name: &'a str) -> StoreFuture<'a, bool> {
@@ -226,5 +321,40 @@ impl Store for FilesystemStore {
                 Err(e) => Err(convert(e)),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fallback_serializes_contending_creators() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("Fixture.epub");
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let writers = (*b"ab").map(|byte| {
+                let temporary = dir.path().join(char::from(byte).to_string());
+                fs::write(&temporary, [byte]).unwrap();
+                let (dest, barrier) = (&dest, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    (byte, rename_if_absent(&temporary, dest).unwrap())
+                })
+            });
+            let outcomes = writers.map(|w| w.join().unwrap());
+            let (winner, _) = outcomes
+                .iter()
+                .find(|(_, o)| *o == Created::Created)
+                .unwrap();
+            assert_eq!(
+                outcomes
+                    .iter()
+                    .filter(|(_, o)| *o == Created::Exists)
+                    .count(),
+                1
+            );
+            assert_eq!(fs::read(&dest).unwrap(), [*winner]);
+        });
     }
 }
